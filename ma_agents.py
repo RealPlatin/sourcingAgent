@@ -500,7 +500,7 @@ def discover_companies(industry: str, state: SheetState, batch_num: int, region:
     )
 
     _disc = _active_prompts["discovery"]
-    system_prompt = _disc["system"]
+    system_prompt = render_template(_disc["system"], region=region)
     user_prompt = render_template(
         _disc["user_template"],
         archetype=archetype,
@@ -538,7 +538,7 @@ def discover_companies(industry: str, state: SheetState, batch_num: int, region:
 # ============================================================
 # 6. VERIFICATION — M&A Expert with Impressum + LinkedIn priority
 # ============================================================
-def verify_company(company_name: str, industry: str, region: str = "") -> dict | None:
+def verify_company(company_name: str, industry: str, region: str = "", website: str = "") -> dict | None:
     """Verify a candidate company via Perplexity and return structured M&A data.
 
     Checks ownership structure, revenue, employee count, CEO/contact, and
@@ -567,6 +567,7 @@ def verify_company(company_name: str, industry: str, region: str = "") -> dict |
         buyer_profile_extra="",
         verify_extra="",
         region=region,
+        website=website,
     )
     raw = perplexity_call(system_prompt, user_prompt)
     if not raw:
@@ -891,7 +892,7 @@ def generate_sub_niches_openai(broad_industry: str) -> list[str] | None:
 # ============================================================
 def run_ma_agent_loop():
     print("\n" + "=" * 55)
-    print("  M&A COMMAND CENTER V5.1 — INVESTMENT GRADE")
+    print("  M&A COMMAND CENTER V5.2 — INVESTMENT GRADE")
     print("=" * 55)
     print(f"  Revenue: {CRITERIA.revenue_label()} | Employees: {CRITERIA.employee_label()}")
     print(f"  Rev/FTE: €{CRITERIA.rev_per_emp_min:,.0f}-{CRITERIA.rev_per_emp_max:,.0f}")
@@ -964,7 +965,7 @@ def run_ma_agent_loop():
             print("  Invalid input — please enter a number.")
 
     write_log("--- NEUE SESSION GESTARTET ---")
-    write_log(f"Nische: {target_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.1 | "
+    write_log(f"Nische: {target_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.2 | "
               f"Rev: {CRITERIA.revenue_label()} | Emp: {CRITERIA.employee_label()} | "
               f"Rev/FTE: {CRITERIA.rev_per_emp_min}-{CRITERIA.rev_per_emp_max}")
 
@@ -976,12 +977,27 @@ def run_ma_agent_loop():
     consecutive_failures = 0
     smart_retry = 0
     batch_num = 0
+    _niche_broadened = False
 
     while targets_done < count_needed:
         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
             write_log(f"ABORT: {MAX_CONSECUTIVE_FAILURES} consecutive failures.")
             print(f"\n  ABORTED after {MAX_CONSECUTIVE_FAILURES} failures. Committing buffer...")
             break
+
+        # --- NICHE EXHAUSTION WARNING + AUTO-BROADENING ---
+        if consecutive_failures == 3 and not _niche_broadened:
+            _niche_broadened = True
+            words = target_industry.split()
+            if len(words) > 2:
+                target_industry = " ".join(words[:-2])
+                print(f"\n  *** NICHE EXHAUSTED: auto-broadening to '{target_industry}' ***")
+                write_log(f"NICHE EXHAUSTED: auto-broadened query to '{target_industry}'")
+            else:
+                print(f"\n  *** WARNING: Niche highly exhausted. Consider broadening your search term next time. ***")
+                write_log("NICHE EXHAUSTED: query too short to broaden further")
+            consecutive_failures = 0
+            smart_retry = 0
 
         batch_num += 1
         remaining = count_needed - targets_done
@@ -1052,7 +1068,7 @@ def run_ma_agent_loop():
             name = candidate.get("name", "Unknown")
             print(f"  [{i+1}/{len(unique)}] Verifying: {name}...")
 
-            verified = verify_company(name, target_industry, region=custom_region_name)
+            verified = verify_company(name, target_industry, region=custom_region_name, website=c.get("website", ""))
             api_costs += COST_PERPLEXITY
             stats["verified"] += 1
 
