@@ -33,6 +33,19 @@ MAX_CONSECUTIVE_FAILURES = 5
 COST_PERPLEXITY = 0.005
 PERPLEXITY_RETRIES = 2
 SMART_RETRY_MAX = 2
+_LANGUAGE_MAP = {"DACH": "German", "Benelux": "Dutch"}
+_REASON_CEO_NOT_FOUND = "CEO not found"
+_openai_client = None
+
+
+def _get_openai_client():
+    """Return the module-level OpenAI client, creating it once if needed."""
+    global _openai_client
+    if not _OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        return None
+    if _openai_client is None:
+        _openai_client = _openai_lib.OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 
 # ============================================================
@@ -573,6 +586,96 @@ def verify_company(company_name: str, industry: str, region: str = "", website: 
     return result
 
 
+def lookup_dach_ceo(company_name: str, website: str) -> str | None:
+    """Second-pass Perplexity call to find CEO/Geschäftsführer from DACH Impressum.
+
+    Args:
+        company_name: Legal company name.
+        website: Company website URL for targeted search.
+
+    Returns:
+        CEO name string, or None if not found.
+    """
+    query = (
+        f'Wer ist der Geschäftsführer von "{company_name}" '
+        f'laut deren Impressum auf {website}? '
+        f'Antworte NUR mit dem vollen Namen der Person. Kein Satz, nur Name.'
+    )
+    raw = perplexity_call(
+        "Du bist ein Datenspezialist für deutsche Unternehmensregister. "
+        "Antworte ausschließlich mit dem gesuchten Namen.",
+        query,
+    )
+    if not raw:
+        return None
+    name = raw.strip().split("\n")[0].strip().rstrip(".")
+    if not name or len(name) < 4:
+        return None
+    skip_patterns = ("not found", "nicht", "keine", "unbekannt", "konnte nicht", "?", "n/a")
+    if any(p in name.lower() for p in skip_patterns):
+        return None
+    return name
+
+
+def deep_link_contact_scan(website: str, company_name: str) -> dict:
+    """Second-pass contact retrieval: explicitly checks /kontakt, /impressum, /uber-uns.
+
+    Args:
+        website: Base URL of the company website.
+        company_name: Company name for logging.
+
+    Returns:
+        Dict with keys 'phone' and 'email' (values may be 'NOT FOUND').
+    """
+    if not website or _is_missing(website):
+        return {}
+    system = (
+        "You are a contact data extractor. Return ONLY valid JSON with exactly two keys: "
+        '{"phone": "...", "email": "..."}. Use "NOT FOUND" if unavailable.'
+    )
+    user = (
+        f"Visit these pages of {website}: /kontakt, /impressum, /uber-uns, /contact-us, /about. "
+        "Search for the terms: Tel, Telefon, Phone, Mail, @, Ansprechpartner, Zentrale. "
+        "Return the main office phone number and a general contact email. "
+        'Use "NOT FOUND" for any value you cannot find.'
+    )
+    raw = perplexity_call(system, user)
+    if not raw:
+        return {}
+    result = extract_json_object(raw)
+    write_log(f"DEEP-LINK-SCAN {company_name}: phone={result.get('phone')} email={result.get('email')}")
+    return result
+
+
+def external_contact_search(company_name: str, city: str) -> dict:
+    """Safety-net contact search via public business directories (Maps, Yelp, North Data).
+
+    Args:
+        company_name: Full legal company name.
+        city: City of the company's registered office.
+
+    Returns:
+        Dict with keys 'phone' and 'email' (values may be 'NOT FOUND').
+    """
+    system = (
+        "You are a contact researcher. Return ONLY valid JSON with exactly two keys: "
+        '{"phone": "...", "email": "..."}. Use "NOT FOUND" if unavailable.'
+    )
+    location = f" in {city}" if city and not _is_missing(city) else ""
+    user = (
+        f"Search for the official contact details of '{company_name}'{location}. "
+        "Check Google Maps, Yelp, North Data, or the official national business registry. "
+        "Provide the main office phone number and a general contact email (e.g. info@...). "
+        'Use "NOT FOUND" for any value you cannot find.'
+    )
+    raw = perplexity_call(system, user)
+    if not raw:
+        return {}
+    result = extract_json_object(raw)
+    write_log(f"EXTERNAL-SEARCH {company_name}: phone={result.get('phone')} email={result.get('email')}")
+    return result
+
+
 # ============================================================
 # 7. HARD GATES — Programmatic checks with Rev/FTE triangulation
 # ============================================================
@@ -790,7 +893,7 @@ def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bo
 
     # --- SOFT GATES → Needs Research ---
     if _is_missing(data.get("ceo_name")):
-        return True, "CEO not found", "Needs Research"
+        return True, _REASON_CEO_NOT_FOUND, "Needs Research"
     if _is_missing(data.get("email")) and _is_missing(data.get("phone")):
         return True, "No contact info", "Needs Research"
     if revenue is None and employees is None:
@@ -844,9 +947,9 @@ def generate_sub_niches_openai(broad_industry: str) -> list[str] | None:
     Returns:
         List of 5 niche strings, or None on any failure.
     """
-    if not _OPENAI_AVAILABLE or not OPENAI_API_KEY:
+    client = _get_openai_client()
+    if client is None:
         return None
-    client = _openai_lib.OpenAI(api_key=OPENAI_API_KEY)
     system_prompt = (
         "You are an elite M&A advisor. The user provides a broad industry. "
         "Generate 5 highly specific, highly fragmented, and profitable sub-niches "
@@ -884,14 +987,13 @@ def translate_industry(industry: str, region: str, custom_region_name: str) -> s
     Returns:
         Translated industry string, or the original if translation is unavailable.
     """
-    if not _OPENAI_AVAILABLE or not OPENAI_API_KEY:
-        return industry
     if region == "UK":
         return industry
-    lang_map = {"DACH": "German", "Benelux": "Dutch"}
-    target_lang = lang_map.get(region, f"the primary language of {custom_region_name}")
+    client = _get_openai_client()
+    if client is None:
+        return industry
+    target_lang = _LANGUAGE_MAP.get(region, f"the primary language of {custom_region_name}")
     try:
-        client = _openai_lib.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -915,12 +1017,56 @@ def translate_industry(industry: str, region: str, custom_region_name: str) -> s
         return industry
 
 
+def broaden_industry_gpt(industry: str, region: str) -> str:
+    """Use GPT-4o-mini to find a semantically broader parent industry term.
+
+    Falls back to stripping last 2 words if OpenAI is unavailable.
+
+    Args:
+        industry: Current (possibly too narrow) industry string.
+        region: Profile key ('DACH', 'UK', 'Benelux', 'Custom').
+
+    Returns:
+        Broader industry term in the same language as the input.
+    """
+    words = industry.split()
+    fallback = " ".join(words[:-2]).rstrip("-–—").strip() if len(words) > 2 else industry
+
+    client = _get_openai_client()
+    if client is None:
+        return fallback
+    target_lang = _LANGUAGE_MAP.get(region, "English")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    f"You are an industry taxonomy expert. Return a broader parent industry term in {target_lang} "
+                    f"with one descriptive B2B search angle appended (e.g. 'contract manufacturing', "
+                    f"'outsourcing partners', 'industrial testing', 'technical services'). "
+                    f"Stay technical and within the production/technology sector. "
+                    f"Never return terms as broad as 'Dienstleistung', 'Handel', 'services', or 'trade'. "
+                    f"Return ONLY the term — no explanation, no quotes, no punctuation."
+                )},
+                {"role": "user", "content": f"Broader term with B2B angle for: '{industry}'"},
+            ],
+            temperature=0.1,
+            max_tokens=50,
+        )
+        result = response.choices[0].message.content.strip().rstrip("-–—").strip()
+        if len(result) >= 3 and result.lower() != industry.lower():
+            return result
+    except Exception as exc:
+        print(f"  [Warning] GPT broadening failed: {exc}")
+    return fallback
+
+
 # ============================================================
 # 9. MAIN PIPELINE — Simple, linear, no leads lost
 # ============================================================
 def run_ma_agent_loop():
     print("\n" + "=" * 55)
-    print("  M&A COMMAND CENTER V5.6 — INVESTMENT GRADE")
+    print("  M&A COMMAND CENTER V5.9 — INVESTMENT GRADE")
     print("=" * 55)
     print(f"  Revenue: {CRITERIA.revenue_label()} | Employees: {CRITERIA.employee_label()}")
     print(f"  Rev/FTE: €{CRITERIA.rev_per_emp_min:,.0f}-{CRITERIA.rev_per_emp_max:,.0f}")
@@ -998,7 +1144,7 @@ def run_ma_agent_loop():
             print("  Invalid input — please enter a number.")
 
     write_log("--- NEUE SESSION GESTARTET ---")
-    write_log(f"Nische: {target_industry} | Lokalisiert: {localized_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.6 |"
+    write_log(f"Nische: {target_industry} | Lokalisiert: {localized_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.9 |"
               f"Rev: {CRITERIA.revenue_label()} | Emp: {CRITERIA.employee_label()} | "
               f"Rev/FTE: {CRITERIA.rev_per_emp_min}-{CRITERIA.rev_per_emp_max}")
 
@@ -1022,17 +1168,10 @@ def run_ma_agent_loop():
         if consecutive_failures == 3 and not _niche_broadened:
             _niche_broadened = True
             words = target_industry.split()
-            _STOP_WORDS = {"and", "or", "for", "in", "of", "the", "a", "an", "with", "by",
-                           "to", "at", "on", "und", "oder", "für", "von", "mit", "des"}
             if len(words) > 2:
-                broadened = " ".join(words[:-2]).rstrip("-–—").strip()
-                # Strip trailing stop-words (e.g. "Water quality testing and" → "Water quality testing")
-                broad_words = broadened.split()
-                while broad_words and broad_words[-1].lower() in _STOP_WORDS:
-                    broad_words.pop()
-                target_industry = " ".join(broad_words)
+                target_industry = broaden_industry_gpt(target_industry, region)
                 if len(target_industry) < 3:
-                    print(f"\n  *** WARNING: Broadened term too short ('{target_industry}'). Keeping original. ***")
+                    print(f"\n  *** WARNING: Broadened term too short. Keeping original. ***")
                     write_log("NICHE BROADENING: result too short, skipped")
                     target_industry = " ".join(words)
                 else:
@@ -1112,6 +1251,25 @@ def run_ma_agent_loop():
                 batch_num += len(_active_prompts["discovery"]["search_archetypes"]) // 2
             continue
 
+        # V5.9: Early Niche Pivot if >80% of the batch are duplicates
+        _total_batch = len(candidates)
+        _dup_count = _total_batch - len(unique)
+        if _total_batch > 0 and _dup_count / _total_batch > 0.80 and not _niche_broadened:
+            _broad = broaden_industry_gpt(target_industry, region)
+            if _broad and _broad != target_industry:
+                write_log(
+                    f"EARLY NICHE PIVOT: {_dup_count}/{_total_batch} dupes (>80%) — "
+                    f"{target_industry!r} → {_broad!r}"
+                )
+                print(f"  [Niche Pivot] {_dup_count}/{_total_batch} dupes (>80%) → broadening to: {_broad}")
+                target_industry = _broad
+                localized_industry = translate_industry(target_industry, region)
+                _niche_broadened = True
+                consecutive_failures = 0
+                smart_retry = 0
+                batch_num = 0
+                continue
+
         print(f"  {len(unique)} unique candidates to verify\n")
 
         # --- PHASE 3: Verify EVERY candidate ---
@@ -1168,6 +1326,28 @@ def run_ma_agent_loop():
             print(f"    [RAW] Rev={raw_rev} | Emp={raw_emp} | Own={raw_own} | Parent={raw_parent}")
             write_log(f"RAW FINANCIALS: {v_name} | Rev={raw_rev} | Emp={raw_emp} | Own={raw_own} | Parent={raw_parent}")
 
+            # --- V5.9 CONTACT-STRIKE: Escalating rescue passes ---
+            if _is_missing(verified.get("email")) and _is_missing(verified.get("phone")):
+                write_log(f"CONTACT-STRIKE: {v_name} — running Deep-Link-Scan")
+                print(f"    [Contact-Strike] Deep-link scan...")
+                contact = deep_link_contact_scan(verified.get("website", v_website), v_name)
+                api_costs += COST_PERPLEXITY
+                if not _is_missing(contact.get("phone")):
+                    verified["phone"] = contact["phone"]
+                if not _is_missing(contact.get("email")):
+                    verified["email"] = contact["email"]
+
+                if _is_missing(verified.get("email")) and _is_missing(verified.get("phone")):
+                    write_log(f"CONTACT-STRIKE: {v_name} — running External Safety-Net Search")
+                    print(f"    [Contact-Strike] External safety-net search...")
+                    city = verified.get("city", verified.get("location", ""))
+                    contact2 = external_contact_search(v_name, str(city))
+                    api_costs += COST_PERPLEXITY
+                    if not _is_missing(contact2.get("phone")):
+                        verified["phone"] = contact2["phone"]
+                    if not _is_missing(contact2.get("email")):
+                        verified["email"] = contact2["email"]
+
             # --- PRE-FLIGHT: Fact-check absurd Rev/FTE ratios ---
             verified, did_preflight = preflight_check(verified, v_name, target_industry, region=custom_region_name)
             if did_preflight:
@@ -1176,6 +1356,27 @@ def run_ma_agent_loop():
             # --- PHASE 4: Hard Gates ---
             passed, reason, destination = hard_gate_check(verified)
             sheet_data = map_to_sheet(verified, target_industry)
+
+            # --- CEO FALLBACK: DACH self-correction → generic fallback ---
+            if destination == "Needs Research" and reason == _REASON_CEO_NOT_FOUND:
+                if region == "DACH":
+                    write_log(f"CEO LOOKUP: second-pass Impressum search for {v_name}")
+                    ceo = lookup_dach_ceo(v_name, v_website)
+                    api_costs += COST_PERPLEXITY
+                    if ceo:
+                        print(f"    [CEO-FIX] Found via Impressum: {ceo}")
+                        verified["ceo_name"] = ceo
+                        sheet_data = map_to_sheet(verified, target_industry)
+                        passed, reason, destination = hard_gate_check(verified)
+                        write_log(f"CEO LOOKUP: found '{ceo}' for {v_name}")
+                if _is_missing(verified.get("ceo_name")) and not _is_missing(verified.get("phone")):
+                    verified["ceo_name"] = "An die Geschäftsführung"
+                    sheet_data = map_to_sheet(verified, target_industry)
+                    destination = "Ready to Call"
+                    passed = True
+                    reason = "CEO fallback: An die Geschäftsführung"
+                    print(f"    [CEO-FALLBACK] Set to 'An die Geschäftsführung'")
+                    write_log(f"CEO FALLBACK applied: {v_name}")
 
             if not passed:
                 ownership = verified.get("ownership_type", "?")

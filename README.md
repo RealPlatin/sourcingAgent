@@ -1,126 +1,10 @@
-# DeBruyn Capital — M&A Sourcing Agent
+# M&A Command Center V5.9
 
-Ein automatisierter Pipeline-Agent zur Identifikation von M&A-Akquisitionszielen im deutschen Mittelstand (DACH-Region).
-
----
-
-## Prozess-Übersicht
-
-```
-[Discovery]  →  [Verification]  →  [Pre-Flight Check]  →  [Hard Gates]  →  [Google Sheets]
-   Perplexity       Perplexity          Perplexity           Code-Logik       3 Tabs
-   10 Namen/Batch   1 Firma/Call        Optional             .env-Werte       Ready / Needs Research / Abgelehnt
-```
-
-Pro Batch werden ~10 Firmennamen gefunden, jede Firma einzeln verifiziert, und anschließend durch deterministische Code-Gates gefiltert.
+Automated M&A pipeline for identifying investment-grade SME acquisition targets across Europe. Combines Perplexity Sonar (web research) with GPT-4o-mini (translation, niche broadening, sub-niche expansion) and Google Sheets (output).
 
 ---
 
-## Prompt 1: Discovery
-
-**Zweck:** Findet Firmennamen in einer Branche/Nische. Bewusst ohne Finanzfilter — Menge vor Qualität. Die Filterung passiert erst später.
-
-**Template-Variablen:**
-
-| Variable | Beschreibung | Beispiel |
-|----------|-------------|---------|
-| `{{archetype}}` | Aktueller Suchwinkel (rotierend aus `search_archetypes`) | `"Finde KMU in Bayern..."` |
-| `{{discovery_count}}` | Anzahl gesuchter Firmen pro Batch | `10` |
-| `{{discovery_extra}}` | Optionale Ergänzung aus `config.json` → `prompts.discovery_extra` | leer oder `"Fokus: Norddeutschland"` |
-
-**Hebel:** Die `search_archetypes`-Liste in `config.json` steuert, welche Suchwinkel rotiert werden. 10 Archetypes, jeder Batch wählt einen anderen.
-
----
-
-## Prompt 2: Verification
-
-**Zweck:** Prüft eine einzelne Firma vollständig: Impressum, Finanzdaten, Mitarbeiterzahl, Inhaberschaft, Kontaktdaten. Basis für alle Hard Gates.
-
-**Template-Variablen:**
-
-| Variable | Beschreibung | Quelle |
-|----------|-------------|--------|
-| `{{company_name}}` | Vollständiger Firmenname | Discovery-Ergebnis |
-| `{{industry}}` | Zielnische/Branche | User-Eingabe beim Start |
-| `{{rev_label}}` | Umsatz-Zielbereich als Text | Aus `.env` → `REV_MIN`/`REV_MAX` |
-| `{{emp_label}}` | Mitarbeiter-Zielbereich als Text | Aus `.env` → `EMP_MIN`/`EMP_MAX` |
-| `{{roles_str}}` | Gesuchte Kontaktrollen | Aus `.env` → `REQUIRED_ROLES` |
-| `{{buyer_profile_extra}}` | Optionale Ergänzung zum Käuferprofil | `config.json` → `prompts.buyer_profile_extra` |
-| `{{verify_extra}}` | Optionale Ergänzung zu den Verifikationsregeln | `config.json` → `prompts.verify_extra` |
-
-**Hebel:** Mit `buyer_profile_extra` kann das Käuferprofil ohne Code-Änderung angepasst werden (z.B. Sektor-Präferenzen, geografische Einschränkungen).
-
----
-
-## Prompt 3: Pre-Flight Fact-Check
-
-**Zweck:** Feuert **nur wenn** das Umsatz/Mitarbeiter-Verhältnis außerhalb von 30k–500k EUR/FTE liegt — ein Indikator für fehlerhafte Perplexity-Daten. Korrigiert die Zahlen via gezieltem Folge-Call.
-
-**Template-Variablen:**
-
-| Variable | Beschreibung |
-|----------|-------------|
-| `{{company_name}}` | Vollständiger Firmenname |
-| `{{industry}}` | Zielnische/Branche |
-| `{{revenue_eur}}` | Gemeldeter Umsatz aus Verification |
-| `{{employees_count}}` | Gemeldete Mitarbeiterzahl aus Verification |
-
-**Hebel:** Kann effektiv deaktiviert werden, indem `REV_PER_EMP_MIN=0` und `REV_PER_EMP_MAX=0` in `.env` gesetzt werden.
-
----
-
-## .env Parameter — Filterlogik (Hard Gates)
-
-Diese Werte steuern die **deterministische Code-Filterung** nach der Verification. `0` = Gate deaktiviert.
-
-| Parameter | Beschreibung | Beispiel |
-|-----------|-------------|---------|
-| `REV_MIN` | Minimaler Jahresumsatz in EUR | `4000000` (= 4 Mio) |
-| `REV_MAX` | Maximaler Jahresumsatz in EUR | `15000000` (= 15 Mio) |
-| `EMP_MIN` | Minimale Mitarbeiterzahl | `20` |
-| `EMP_MAX` | Maximale Mitarbeiterzahl | `200` |
-| `REV_PER_EMP_MIN` | Minimaler Umsatz pro Mitarbeiter | `10000` |
-| `REV_PER_EMP_MAX` | Maximaler Umsatz pro Mitarbeiter | `500000` |
-| `FORBIDDEN_OWNERSHIP` | Verbotene Eigentumsformen (kommagetrennt) | `subsidiary,group,listed,public,konzern,tochter` |
-| `REQUIRED_ROLES` | Erforderliche Kontaktrollen für Verification | `Geschäftsführer,CEO,Inhaber` |
-| `PERPLEXITY_API_KEY` | API-Key für Perplexity Sonar Pro | `pplx-...` |
-
----
-
-## config.json Parameter — Prompt-Anpassung
-
-| Schlüssel | Beschreibung | Direkt editierbar? |
-|-----------|-------------|-------------------|
-| `SPREADSHEET_ID` | Google Sheets ID (aus URL) | ✅ Ja |
-| `prompts.discovery.search_archetypes` | Liste der 10 Suchwinkel für Discovery | ✅ Ja — Haupthebel für Diversität |
-| `prompts.discovery.system` | System-Rolle des Discovery-Agents | ✅ Ja |
-| `prompts.discovery.user_template` | Discovery-Prompt-Template mit `{{var}}`-Platzhaltern | ✅ Ja (mit Vorsicht) |
-| `prompts.verify.system` | System-Rolle des Verification-Agents | ✅ Ja |
-| `prompts.verify.user_template` | Verification-Prompt-Template | ✅ Ja (mit Vorsicht) |
-| `prompts.preflight.system` | System-Rolle des Fact-Check-Agents | ✅ Ja |
-| `prompts.preflight.user_template` | Fact-Check-Prompt-Template | ✅ Ja (mit Vorsicht) |
-
-> **Hinweis zu Template-Syntax:** Platzhalter werden als `{{variablenname}}` geschrieben (doppelte geschweifte Klammern). Einzelne `{...}` im Prompttext (z.B. JSON-Beispiele) bleiben unverändert.
-
----
-
-## Häufige Anpassungen — "Welchen Hebel ziehe ich?"
-
-| Ziel | Hebel | Datei |
-|------|-------|-------|
-| Andere Branche suchen | Industry-Eingabe beim Start des Scripts | Interaktiv |
-| Größere Unternehmen | `REV_MIN`, `REV_MAX`, `EMP_MIN`, `EMP_MAX` erhöhen | `.env` |
-| Mehr regionale Diversität | Neue Einträge in `search_archetypes` hinzufügen | `config.json` |
-| Eigenes Käuferprofil ergänzen | `prompts.buyer_profile_extra` befüllen | `config.json` |
-| Strengere Eigentumsfilter | `FORBIDDEN_OWNERSHIP` ergänzen | `.env` |
-| Verification-Fokus ändern | `prompts.verify_extra` befüllen | `config.json` |
-| Discovery-Suche schärfen | `prompts.discovery_extra` befüllen | `config.json` |
-| Pre-Flight deaktivieren | `REV_PER_EMP_MIN=0` und `REV_PER_EMP_MAX=0` | `.env` |
-| Mehr Firmen pro Batch | `DISCOVERY_COUNT` in `ma_agents.py` erhöhen | `ma_agents.py` (Zeile ~26) |
-
----
-
-## Start
+## Quick Start
 
 ```bash
 cd "DeBruyn Capital"
@@ -128,20 +12,140 @@ source .venv/bin/activate
 python ma_agents.py
 ```
 
-## Umgebung wiederherstellen
+You will be prompted for:
+1. **Region** — DACH / UK / Benelux / custom name (e.g. "France")
+2. **Niche** — choose 1–5 preset or type your own; optionally expand via AI sub-niches
+3. **Target count** — how many "Ready to Call" companies to deliver
+
+---
+
+## Multi-Region Support
+
+| Key     | Coverage                              |
+|---------|---------------------------------------|
+| DACH    | Germany, Austria, Switzerland         |
+| UK      | United Kingdom                        |
+| Benelux | Netherlands, Belgium, Luxembourg      |
+| Custom  | Any region — type it at the prompt    |
+
+Region selection loads a dedicated prompt profile (`config.json → prompts.<region>`), including 10 search archetypes, niche suggestions, verify template, and preflight template.
+
+**Custom regions** inject `{{region}}` into generic English templates. All other regions use hardcoded local terminology (e.g. DACH uses Bundesanzeiger, Handelsregister, inhabergeführt).
+
+---
+
+## Translation Bridge
+
+For DACH and Benelux sessions, the English niche term entered by the user is automatically translated to German / Dutch via GPT-4o-mini before Perplexity search. This prevents zero-result batches on non-English niches.
+
+Falls back to the original term if OpenAI is unavailable.
+
+---
+
+## Geo-Fencing
+
+Every discovery prompt includes a hard GEO-FENCE instruction. Companies not headquartered in the selected region are discarded at the prompt level. For DACH, the system uses local registry terminology to surface SMEs with limited English web presence.
+
+---
+
+## Precision Impressum Scraping
+
+The DACH verify step uses two targeted Perplexity queries per company:
+
+1. `site:<website> intitle:Impressum`
+2. `site:<website> intitle:Kontakt OR intitle:Vertretungsberechtigt`
+
+The agent extracts the verbatim name after `Geschäftsführer:`, `Vertreten durch:`, or `Inhaber:`. German law requires every company website to publish this — if not found on the first pass, a second-pass `lookup_dach_ceo()` call is made.
+
+---
+
+## Contact-Striker (V5.9)
+
+When the initial verify pass returns no phone or email, two escalating rescue passes fire automatically:
+
+1. **Deep-Link-Scan** — a targeted Perplexity call explicitly visits `/kontakt`, `/impressum`, `/uber-uns`, `/contact-us`, `/about` and searches for `Tel`, `Telefon`, `Mail`, `@`, `Ansprechpartner`, `Zentrale`.
+2. **External Safety-Net** — if the Deep-Link-Scan still finds nothing, a second Perplexity call searches Google Maps, Yelp, North Data, and national business registries for the company's official contact details.
+
+A lead only lands in "Needs Research" for missing contact data if **both** passes return nothing.
+
+---
+
+## CEO Fallback Logic
+
+If a financially qualified company would otherwise land in "Needs Research" due to a missing CEO name:
+
+1. **DACH only**: A second Perplexity call (`lookup_dach_ceo`) searches the Impressum directly for `Geschäftsführer`.
+2. **All regions (phone required)**: If a phone number is available but CEO is still missing, `ceo_name` is set to `"An die Geschäftsführung"` (generic salutation) and the company is promoted to **Ready to Call**. If no phone was found, the lead stays in "Needs Research".
+
+This ensures no financially qualified lead with a reachable phone number is lost to a missing contact name.
+
+---
+
+## Intelligent Niche Broadening
+
+After 3 consecutive failures (empty or all-duplicate batches), the pipeline automatically broadens the search niche:
+
+- **GPT-4o-mini** identifies a semantically broader parent category with a B2B search angle appended (e.g. "contract manufacturing", "industrial testing", "outsourcing partners"), in the correct language (German for DACH, Dutch for Benelux, English otherwise).
+- Example: "Specialized maintenance services for renewable energy equipment" → "Renewable Energy Services industrial testing"
+- Output stays technical and within the production/technology sector (never broad terms like "Dienstleistung" or "services").
+- Falls back to word-stripping (last 2 words removed) if OpenAI is unavailable.
+
+---
+
+## Pipeline Architecture (5 Phases)
+
+```
+DISCOVERY  →  DEDUP  →  VERIFY  →  CEO FALLBACK  →  HARD GATES  →  SHEETS
+```
+
+| Phase         | Tool        | Description                                         |
+|---------------|-------------|-----------------------------------------------------|
+| Discovery     | Perplexity  | 10 rotating archetypes, geo-fenced                 |
+| Dedup         | SheetState  | Name fuzzy match + domain dedup                    |
+| Verify        | Perplexity  | Full financial + ownership + contact deep-dive     |
+| CEO Fallback  | Perplexity  | Second-pass Impressum search (DACH) + generic name |
+| Hard Gates    | Python      | Rev/FTE triangulation, ownership, role check       |
+| Sheets        | Sheets v4   | Batch-write to Targets / Needs Research / Abgelehnt|
+
+**Smart-Retry**: on zero-candidate or all-duplicate batches, jumps to a different archetype (up to `SMART_RETRY_MAX=2` times) before counting as a failure.
+
+**Early Niche Pivot**: if >80% of a discovery batch are known duplicates (even if some unique candidates remain), the pipeline immediately broadens the niche via `broaden_industry_gpt()` rather than wasting further API calls on an exhausted niche.
+
+---
+
+## `.env` Configuration
+
+```env
+REV_MIN=4000000        # 0 = no minimum
+REV_MAX=15000000       # 0 = no maximum
+EMP_MIN=20             # 0 = no minimum
+EMP_MAX=200            # 0 = no maximum
+REV_PER_EMP_MIN=10000
+REV_PER_EMP_MAX=500000
+FORBIDDEN_OWNERSHIP=subsidiary,group,listed,public,konzern,tochter
+REQUIRED_ROLES=Geschäftsführer,Managing Director,CEO,Inhaber
+PERPLEXITY_API_KEY=pplx-...
+OPENAI_API_KEY=sk-...
+```
+
+---
+
+## Output Tabs (Google Sheets)
+
+| Tab              | Contents                                                  |
+|------------------|-----------------------------------------------------------|
+| Targets          | Ready to Call — passed all hard gates                    |
+| Needs Research   | Financially qualified but missing data (e.g. revenue)    |
+| Abgelehnt        | Rejected — failed hard gates (wrong size, subsidiary...) |
+
+Each row includes: company name, website, city, revenue, employees, ownership type, CEO/contact, email, phone, Impressum URL, LinkedIn, fit verdict, confidence, notes.
+
+---
+
+## Environment Setup
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
----
-
-## Ausgabe-Tabs in Google Sheets
-
-| Tab | Inhalt |
-|-----|--------|
-| **Ready to Call** | Firma verifiziert, alle Gates bestanden, Kontaktdaten vorhanden |
-| **Needs Research** | Firma interessant, aber Kontaktdaten oder Finanzdaten fehlen |
-| **Abgelehnt** | Firma durch Hard Gates ausgeschlossen (mit Ablehnungsgrund) |

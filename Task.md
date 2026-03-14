@@ -1,6 +1,6 @@
 # M&A Agent - Task Tracking
 
-## Aktueller Status: V5.1 Implementiert (2026-03-14)
+## Aktueller Status: V5.9 Production Ready (2026-03-14)
 
 ### V5.1 — Execution Plan (PLAN ONLY — no code written yet)
 
@@ -282,3 +282,7 @@ REQUIRED_ROLES=Geschäftsführer,Managing Director,CEO,Inhaber
 - **V4.x:** Interne Refactoring-Versionen, Google-style Docstrings, Hygiene
 - **V4.2:** Alle 4 kritischen Bugs gefixt (infinite loop, revenue parser, preflight cost, hallucination check)
 - **V5.0:** Pan-Europe Architektur — DACH / UK / Benelux region-aware via config.json, CLI region picker, `_active_prompts` runtime dispatch
+- **V5.6:** Critical bug fixes — self-blocking domain dedup loop (domains were added before verify), wrong variable `c` in dedup phase, stop-word broadening restored
+- **V5.7.1:** Lead maximization — `lookup_dach_ceo()` second-pass Impressum search, "An die Geschäftsführung" CEO fallback, `broaden_industry_gpt()` intelligent niche broadening via GPT-4o-mini, precision Impressum scraping instructions in DACH verify template (intitle:Impressum + intitle:Kontakt OR intitle:Vertretungsberechtigt), README full rewrite
+- **V5.8.1:** Archetype 5/6 command-style list-extraction queries (all regions), precision broadening with B2B search angle via GPT-4o-mini
+- **V5.9:** Contact-Striker — Deep-Link-Scan subpage scraping (/kontakt/impressum/uber-uns), External Safety-Net search (Maps/Yelp/NorthData), universal CEO "An die Geschäftsführung" fallback requires phone present (all regions), 80% dup-rate Niche Pivot
