@@ -1,12 +1,37 @@
-# Google Credentials
+# =============================================================
+# DeBruyn Capital — M&A Agent .gitignore
+# =============================================================
+
+# --- Python Virtual Environment ---
+.venv/
+venv/
+env/
+
+# --- Python Cache ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# --- Google API Credentials & Tokens ---
 credentials.json
 client_secret_*.json
-*.json
+token.json
 
-# Env Variables (für deinen Anthropic Key)
+# --- Environment Variables (API Keys) ---
 .env
-# Python Cache
-__pycache__/
+.env.*
 
-config.json
+# --- Runtime / Session Data ---
 Session_Log.md
+
+# --- macOS ---
+.DS_Store
+*.swp
+*.swo
+
+# --- IDE ---
+.idea/
+.vscode/
+*.code-workspace
