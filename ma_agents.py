@@ -1270,7 +1270,7 @@ def run_ma_agent_loop():
                 )
                 print(f"  [Niche Pivot] {_dup_count}/{_total_batch} dupes (>80%) → broadening to: {_broad}")
                 target_industry = _broad
-                localized_industry = translate_industry(target_industry, region)
+                localized_industry = translate_industry(target_industry, region, custom_region_name)
                 _niche_broadened = True
                 consecutive_failures = 0
                 smart_retry = 0
