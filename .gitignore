@@ -1,0 +1,12 @@
+# Google Credentials
+credentials.json
+client_secret_*.json
+*.json
+
+# Env Variables (für deinen Anthropic Key)
+.env
+# Python Cache
+__pycache__/
+
+config.json
+Session_Log.md
