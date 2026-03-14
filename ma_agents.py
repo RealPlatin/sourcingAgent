@@ -158,7 +158,6 @@ def extract_domain(url_or_name: str) -> str | None:
 
 
 class SheetState:
-    LEGAL_SUFFIXES = {'gmbh', 'co.', 'kg', 'mbh', 'ohg', 'ag', 'und', 'the', 'and', 'se', 'ug', '&'}
     TABS = ["Targets", "Abgelehnt", "Needs Research"]
 
     SHEET_HEADERS = [
@@ -241,16 +240,13 @@ class SheetState:
             sys.exit(0)
         signal.signal(signal.SIGINT, handler)
 
-    @staticmethod
-    def _name_tokens(name: str) -> set:
-        tokens = name.strip().lower().split()
-        return {t for t in tokens if len(t) > 2 and t not in SheetState.LEGAL_SUFFIXES}
-
     def is_duplicate(self, company_name: str, website: str = None) -> tuple[bool, str]:
         """Check if a company already exists in the forbidden set.
 
-        Uses exact match, substring containment, and token-set overlap to
-        catch German legal suffix variations and word-order permutations.
+        Blocks only on exact name match (case-insensitive) or exact domain match.
+        Fuzzy matching is intentionally excluded to allow related-but-distinct
+        companies (e.g. "Schmidt GmbH" vs "Schmidt GmbH & Co. KG") with different
+        domains to both pass through.
 
         Args:
             company_name: Company name to check.
@@ -268,18 +264,6 @@ class SheetState:
                 continue
             if entry == name_lower:
                 return True, f"exact match: '{entry}'"
-            if len(entry) > 8 and (entry in name_lower or name_lower in entry):
-                return True, f"name match: '{entry}'"
-
-        new_tokens = self._name_tokens(company_name)
-        if len(new_tokens) >= 2:
-            for entry in self.forbidden_names:
-                entry_tokens = self._name_tokens(entry)
-                if len(entry_tokens) >= 2 and new_tokens == entry_tokens:
-                    return True, f"token match: '{entry}'"
-                overlap = new_tokens & entry_tokens
-                if len(overlap) >= 2 and len(overlap) >= len(min(new_tokens, entry_tokens, key=len)):
-                    return True, f"token overlap: '{entry}'"
 
         if website:
             domain = extract_domain(website)
@@ -480,24 +464,26 @@ def extract_json_object(raw: str) -> dict | None:
 SEARCH_ARCHETYPES: list = []   # dynamically set from _active_prompts in run_ma_agent_loop
 
 
-def discover_companies(industry: str, state: SheetState, batch_num: int, region: str = "") -> list[dict]:
+def discover_companies(industry: str, localized_industry: str, state: SheetState, batch_num: int, region: str = "") -> list[dict]:
     """Search-oriented discovery — asks Perplexity to SEARCH, not to list from memory.
 
     Args:
-        industry: Target industry/niche string (e.g. "Industriemontage").
+        industry: English industry/niche string (used for logging/verify context).
+        localized_industry: Region-language-translated niche string for search queries.
         state: Active SheetState used for forbidden-name deduplication.
         batch_num: Current batch index; used to rotate SEARCH_ARCHETYPES.
 
     Returns:
         List of dicts with at minimum {"company_name": str, "website": str}.
     """
-    # Rotate archetype based on batch number, resolve {industry} placeholder
+    # Rotate archetype based on batch number, resolve {industry} placeholder with localized term
     _archetypes = _active_prompts["discovery"]["search_archetypes"]
     archetype = render_template(
         _archetypes[batch_num % len(_archetypes)],
-        industry=industry,
+        industry=localized_industry,
         region=region,
     )
+    print(f"  DEBUG: Final Search Query: {archetype}")
 
     _disc = _active_prompts["discovery"]
     system_prompt = render_template(_disc["system"], region=region)
@@ -887,12 +873,54 @@ def generate_sub_niches_openai(broad_industry: str) -> list[str] | None:
         return None
 
 
+def translate_industry(industry: str, region: str, custom_region_name: str) -> str:
+    """Translate the industry/niche string into the primary language of the target region.
+
+    Args:
+        industry: English industry/niche string entered by the user.
+        region: Profile key ('DACH', 'UK', 'Benelux', 'Custom').
+        custom_region_name: Human-readable region name (e.g. 'France').
+
+    Returns:
+        Translated industry string, or the original if translation is unavailable.
+    """
+    if not _OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        return industry
+    if region == "UK":
+        return industry
+    lang_map = {"DACH": "German", "Benelux": "Dutch"}
+    target_lang = lang_map.get(region, f"the primary language of {custom_region_name}")
+    try:
+        client = _openai_lib.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    f"Translate the following business/industry term into {target_lang}. "
+                    "Return ONLY the translated term — no explanation, no quotes, no punctuation."
+                )},
+                {"role": "user", "content": industry},
+            ],
+            temperature=0.1,
+            max_tokens=50,
+        )
+        translated = response.choices[0].message.content.strip()
+        # Sanitize: strip trailing hyphens/dashes, enforce minimum 3 chars
+        translated = translated.rstrip("-–—").strip()
+        if len(translated) < 3:
+            return industry
+        return translated if translated else industry
+    except Exception as exc:
+        print(f"  [Warning] Translation failed: {exc}")
+        return industry
+
+
 # ============================================================
 # 9. MAIN PIPELINE — Simple, linear, no leads lost
 # ============================================================
 def run_ma_agent_loop():
     print("\n" + "=" * 55)
-    print("  M&A COMMAND CENTER V5.2 — INVESTMENT GRADE")
+    print("  M&A COMMAND CENTER V5.6 — INVESTMENT GRADE")
     print("=" * 55)
     print(f"  Revenue: {CRITERIA.revenue_label()} | Employees: {CRITERIA.employee_label()}")
     print(f"  Rev/FTE: €{CRITERIA.rev_per_emp_min:,.0f}-{CRITERIA.rev_per_emp_max:,.0f}")
@@ -955,6 +983,11 @@ def run_ma_agent_loop():
                 elif pick:
                     target_industry = pick
                 print(f"  Using: {target_industry}")
+    # --- TRANSLATION BRIDGE ---
+    localized_industry = translate_industry(target_industry, region, custom_region_name)
+    if localized_industry != target_industry:
+        print(f"  Search term localized: '{target_industry}' → '{localized_industry}'")
+
     while True:
         try:
             count_needed = int(input("How many 'Ready to Call' targets? "))
@@ -965,7 +998,7 @@ def run_ma_agent_loop():
             print("  Invalid input — please enter a number.")
 
     write_log("--- NEUE SESSION GESTARTET ---")
-    write_log(f"Nische: {target_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.2 | "
+    write_log(f"Nische: {target_industry} | Lokalisiert: {localized_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.6 |"
               f"Rev: {CRITERIA.revenue_label()} | Emp: {CRITERIA.employee_label()} | "
               f"Rev/FTE: {CRITERIA.rev_per_emp_min}-{CRITERIA.rev_per_emp_max}")
 
@@ -989,10 +1022,23 @@ def run_ma_agent_loop():
         if consecutive_failures == 3 and not _niche_broadened:
             _niche_broadened = True
             words = target_industry.split()
+            _STOP_WORDS = {"and", "or", "for", "in", "of", "the", "a", "an", "with", "by",
+                           "to", "at", "on", "und", "oder", "für", "von", "mit", "des"}
             if len(words) > 2:
-                target_industry = " ".join(words[:-2])
-                print(f"\n  *** NICHE EXHAUSTED: auto-broadening to '{target_industry}' ***")
-                write_log(f"NICHE EXHAUSTED: auto-broadened query to '{target_industry}'")
+                broadened = " ".join(words[:-2]).rstrip("-–—").strip()
+                # Strip trailing stop-words (e.g. "Water quality testing and" → "Water quality testing")
+                broad_words = broadened.split()
+                while broad_words and broad_words[-1].lower() in _STOP_WORDS:
+                    broad_words.pop()
+                target_industry = " ".join(broad_words)
+                if len(target_industry) < 3:
+                    print(f"\n  *** WARNING: Broadened term too short ('{target_industry}'). Keeping original. ***")
+                    write_log("NICHE BROADENING: result too short, skipped")
+                    target_industry = " ".join(words)
+                else:
+                    localized_industry = translate_industry(target_industry, region, custom_region_name)
+                    print(f"\n  *** NICHE EXHAUSTED: auto-broadening to '{target_industry}' (localized: '{localized_industry}') ***")
+                    write_log(f"NICHE EXHAUSTED: auto-broadened query to '{target_industry}' / localized: '{localized_industry}'")
             else:
                 print(f"\n  *** WARNING: Niche highly exhausted. Consider broadening your search term next time. ***")
                 write_log("NICHE EXHAUSTED: query too short to broaden further")
@@ -1010,7 +1056,7 @@ def run_ma_agent_loop():
         # --- PHASE 1: Discovery ---
         _arc_count = len(_active_prompts["discovery"]["search_archetypes"])
         print(f"\n  Discovering companies (archetype {(batch_num % _arc_count) + 1}/{_arc_count})...")
-        candidates = discover_companies(target_industry, state, batch_num, region=custom_region_name)
+        candidates = discover_companies(target_industry, localized_industry, state, batch_num, region=custom_region_name)
         api_costs += COST_PERPLEXITY
 
         if not candidates:
@@ -1031,10 +1077,19 @@ def run_ma_agent_loop():
         print(f"  Found {len(candidates)} real candidates")
 
         # --- PHASE 2: Dedup ---
+        # Only add NAME to seen_in_batch here — do NOT add domain to forbidden_domains.
+        # Adding the website domain in Phase 2 would cause every candidate to self-block
+        # in Phase 3's domain check (verified website ≈ discovery website). Domains are
+        # added to forbidden only after successful verification in Phase 3.
         unique = []
+        seen_in_batch: set = set()
         for c in candidates:
             name = c.get("name", "")
             if not name:
+                continue
+            name_lower = name.strip().lower()
+            if name_lower in seen_in_batch:
+                stats["duplicates"] += 1
                 continue
             is_dup, reason = state.is_duplicate(name, c.get("website"))
             if is_dup:
@@ -1042,7 +1097,8 @@ def run_ma_agent_loop():
                 stats["duplicates"] += 1
             else:
                 unique.append(c)
-                state.add_to_forbidden(name, c.get("website"))
+                seen_in_batch.add(name_lower)
+                state.add_to_forbidden(name)  # name only — no domain yet
 
         if not unique:
             print("  All candidates were duplicates.")
@@ -1068,7 +1124,7 @@ def run_ma_agent_loop():
             name = candidate.get("name", "Unknown")
             print(f"  [{i+1}/{len(unique)}] Verifying: {name}...")
 
-            verified = verify_company(name, target_industry, region=custom_region_name, website=c.get("website", ""))
+            verified = verify_company(name, target_industry, region=custom_region_name, website=candidate.get("website", ""))
             api_costs += COST_PERPLEXITY
             stats["verified"] += 1
 
