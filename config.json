@@ -1,29 +1,141 @@
 {
   "SPREADSHEET_ID": "1MRJHi7KcnmQrYX6RnqtcoN1J6HoT-tg7RtzaZ9M_eRY",
   "prompts": {
-    "discovery": {
-      "search_archetypes": [
-        "Finde inhabergeführte {{industry}}-Unternehmen in Bayern oder Baden-Württemberg.",
-        "Suche nach KMU im Bereich {{industry}} in NRW, Niedersachsen oder Hessen.",
-        "Welche {{industry}}-Firmen gibt es in Sachsen, Thüringen oder Brandenburg?",
-        "Finde {{industry}}-Unternehmen in Österreich (Wien, Graz, Linz) oder der Schweiz.",
-        "Suche {{industry}}-KMU in norddeutschen Städten (Hamburg, Bremen, Kiel, Hannover).",
-        "Suche auf Wer-liefert-was.de oder Europages nach {{industry}}-Anbietern im DACH-Raum.",
-        "Welche Unternehmen haben auf der letzten Fachmesse für {{industry}} ausgestellt?",
-        "Welche Mittelstandsunternehmen sind im Bereich {{industry}} in deutschen Branchenverbänden aktiv?",
-        "Finde {{industry}}-Unternehmen, die Nachfolger suchen oder auf Verkaufsplattformen wie DUB.de stehen.",
-        "Suche nach spezialisierten Nischenanbietern für {{industry}} — Stichwörter: Lohnfertigung, Auftragsfertigung, Spezialist."
-      ],
-      "system": "Du bist ein Researcher für M&A-Transaktionen. Du suchst aktiv im Internet nach Firmen und lieferst NUR Firmen, deren Website du tatsächlich aufgerufen und verifiziert hast. Erfinde NIEMALS Firmennamen oder Websites. Wenn du weniger als 10 verifizierbare Firmen findest, gib nur die an, die du wirklich kennst.",
-      "user_template": "\n{{archetype}}\n\nIch suche {{discovery_count}} echte, kleine bis mittelständische Unternehmen (20-200 Mitarbeiter).\nKeine Konzerne, keine DAX-Unternehmen, keine Tochtergesellschaften großer Konzerne.\n\nPFLICHTREGELN:\n- Nenne NUR Firmen, deren Website du tatsächlich aufgerufen und deren Existenz du bestätigt hast.\n- Jeder Eintrag MUSS eine echte, erreichbare Website enthalten.\n- Wenn du dir bei einer Firma nicht sicher bist: lass sie weg.{{discovery_extra}}\n\nAntworte NUR als JSON-Array:\n[{\"name\": \"Firmenname GmbH\", \"city\": \"Stadt\", \"website\": \"www.example.de\"}]\n"
+    "DACH": {
+      "discovery": {
+        "search_archetypes": [
+          "{{industry}} Mittelstand Bayern Baden-Württemberg inhabergeführt GmbH",
+          "{{industry}} KMU NRW Hessen Niedersachsen Firmenverzeichnis",
+          "{{industry}} Österreich Schweiz KMU Anbieter DACH",
+          "{{industry}} wer-liefert-was.de Europages Anbieter DACH",
+          "{{industry}} Fachmesse Aussteller 2023 2024 Deutschland",
+          "{{industry}} Branchenverband Mitglied Mittelstand Deutschland",
+          "{{industry}} Nachfolge Unternehmensverkauf DUB.de",
+          "{{industry}} Lohnfertigung Auftragsfertigung Nischenanbieter Spezialist",
+          "{{industry}} Zulieferer Hersteller Anlagenlieferant Spezialmaschinenbau Deutschland",
+          "{{industry}} Technologiepartner OEM Systemintegrator inhabergeführt DACH"
+        ],
+        "niche_suggestions": {
+          "1": "Industrielle Instandhaltung",
+          "2": "Arbeitssicherheit und Prüfdienstleistungen",
+          "3": "Maschinenbau und Sondermaschinenbau",
+          "4": "Wasser- und Abwassertechnik",
+          "5": "CNC-Fertigung und Zerspanung"
+        },
+        "niche_labels": "  1. Industrial Maintenance  |  2. Safety Inspections\n  3. Machine Builder         |  4. Water Management\n  5. CNC Manufacturing",
+        "system": "You are an M&A researcher. Search the web and return only companies whose websites you have verified exist. Never invent company names, websites, or data. If fewer verified companies exist than requested, return only confirmed ones.",
+        "user_template": "\nSearch query: {{archetype}}\n\nFind {{discovery_count}} independent SMEs (20–200 employees) in DACH. Exclude subsidiaries, conglomerates, and publicly listed companies.{{discovery_extra}}\n\nRules:\n- Only include companies whose website you have accessed and verified.\n- If fewer than {{discovery_count}} companies exist in this exact niche, include adjacent suppliers or service providers (e.g. upstream equipment makers, specialist subcontractors).\n- If unsure about a company: omit it.\n- If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON array:\n[{\"name\": \"Firmenname GmbH\", \"city\": \"Stadt\", \"website\": \"www.example.de\"}]\n"
+      },
+      "verify": {
+        "system": "You are an M&A analyst for the German Mittelstand. Respond ONLY with the requested JSON. Financial data must be pure integers — never text strings. If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.",
+        "user_template": "\nAnalyze \"{{company_name}}\" (industry: {{industry}}, DACH) as an M&A acquisition target.\n\nBUYER PROFILE:\n- Revenue: {{rev_label}}\n- Employees: {{emp_label}}\n- Independent entity (GmbH/KG/AG), owner-led or professionally managed\n- Exclude subsidiaries of large groups, exclude publicly listed companies{{buyer_profile_extra}}\n\nSTEPS (execute in order):\n\n1. IMPRESSUM:\n   - Search \"{{company_name}}\" website, then \"{{company_name}} Impressum\", then \"{{company_name}} Kontakt\"\n   - Extract: {{roles_str}} name (verbatim), email, phone, address\n   - impressum_url: output ONLY if the exact URL appears verbatim in retrieved source text. Never construct, guess, or infer URLs. If not found: \"NOT FOUND\".\n\n2. LINKEDIN:\n   - Search \"{{company_name}} LinkedIn\" for headcount and management\n\n3. FINANCIALS:\n   - Check Bundesanzeiger and North Data for 2022–2024 filings\n   - revenue_eur: integer in EUR (e.g. 8500000 for €8.5M). NEVER return 0. If not found in public records, you MUST estimate as employees_count × 120000 and set revenue_source to \"estimated\". Zero is not a valid value.\n   - employees_count: integer only\n   - CRITICAL: Do not confuse millions and billions. €8.5M = 8500000, NOT 8500000000.\n\n4. SUBSIDIARY CHECK:\n   - Check North Data / Handelsregister: independent GmbH or subsidiary?\n   - If subsidiary: record parent_company name and parent_revenue_eur.\n\n5. OWNERSHIP:\n   - ownership_type: exactly one of: \"inhabergeführt\", \"familienunternehmen\", \"management-geführt\", \"subsidiary\", \"group\", \"public\", \"unknown\"\n\n6. FIT:\n   - One sentence: does it match the buyer profile?\n\nRespond ONLY as JSON with these exact keys:\n\"company_name\", \"website\", \"city\", \"country\",\n\"revenue_eur\" (integer EUR), \"revenue_source\" (\"bundesanzeiger\"|\"northdata\"|\"creditreform\"|\"estimated\"|\"NOT FOUND\"),\n\"employees_count\" (integer), \"employees_source\" (\"linkedin\"|\"website\"|\"northdata\"|\"estimated\"|\"NOT FOUND\"),\n\"ownership_type\", \"parent_company\" (name or \"none\"), \"parent_revenue_eur\" (integer or 0),\n\"ceo_name\", \"email\", \"phone\",\n\"impressum_url\", \"impressum_quote\",\n\"linkedin\", \"description\", \"why_interesting\", \"risks\",\n\"fit_verdict\", \"confidence\"\n\n- confidence: \"verified\" | \"estimated\" | \"low\"\n- fit_verdict: \"GOOD FIT\" | \"NEEDS RESEARCH\" | \"NO FIT\" + one-line reason\n- Never invent names, URLs, or data{{verify_extra}}\n"
+      },
+      "preflight": {
+        "system": "You are a financial fact-checker. Respond ONLY with JSON.",
+        "user_template": "Fact-check \"{{company_name}}\" ({{industry}}, DACH).\nClaimed: revenue={{revenue_eur}} EUR, employees={{employees_count}}\n\nCheck Bundesanzeiger and North Data (2022–2024):\n- Is revenue plausible for this headcount?\n- Is headcount accurate?\n- Is this a subsidiary of a larger group?\n\nIf you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON:\n{\"revenue_eur\": [corrected integer or 0], \"employees_count\": [corrected integer or 0], \"correction_note\": \"explanation\"}\n"
+      }
     },
-    "verify": {
-      "system": "Du bist ein M&A-Analyst für den deutschen Mittelstand. Du bewertest Unternehmen als Akquisitionsziele. Du gibst niemals auf: Wenn die Website nicht direkt findbar ist, suchst du nach '[Firmenname] Impressum', '[Firmenname] LinkedIn', oder '[Firmenname] Handelsregister'. Du lieferst Finanzdaten IMMER als reine Zahlen — NIEMALS als Text.",
-      "user_template": "\nAnalysiere \"{{company_name}}\" (Branche: {{industry}}, DACH-Region) als M&A-Target.\n\nKÄUFERPROFIL:\n- Umsatz: {{rev_label}}\n- Mitarbeiter: {{emp_label}}\n- Eigenständiges Unternehmen (GmbH, KG, AG) — kann Inhabergeführt, Familienunternehmen oder professionell gemanagt sein\n- KEINE Tochtergesellschaften großer Konzerne, KEINE börsennotierte Unternehmen{{buyer_profile_extra}}\n\nDEINE AUFGABEN (in dieser Reihenfolge):\n\n1. IMPRESSUM FINDEN (HÖCHSTE PRIORITÄT):\n   - Suche nach \"{{company_name}}\" Website\n   - Wenn nicht direkt gefunden: suche \"{{company_name}} Impressum\" und \"{{company_name}} Kontakt\"\n   - Extrahiere: {{roles_str}} Name (wörtlich), E-Mail, Telefon, Adresse\n   - Notiere die exakte Impressum-URL\n\n2. LINKEDIN PRÜFEN:\n   - Suche \"{{company_name}} LinkedIn\" für Mitarbeiterzahl und Geschäftsführung\n   - LinkedIn-Mitarbeiterzahl ist oft die zuverlässigste Quelle\n\n3. FINANZDATEN (STANDARDISIERT):\n   - Suche auf Bundesanzeiger und North Data nach Jahresabschlüssen 2022-2024.\n   - WICHTIG — Liefere Finanzdaten in diesem EXAKTEN Format:\n     \"revenue_eur\": [Zahl in EUR, z.B. 8500000 für 8.5 Mio] oder \"NOT FOUND\"\n     \"employees_count\": [Ganzzahl, z.B. 85] oder \"NOT FOUND\"\n   - Wenn exakte Zahlen fehlen: SCHÄTZE über Faustformel:\n     Mitarbeiterzahl × €90.000 bis €150.000 = geschätzter Jahresumsatz.\n     Markiere dann revenue_source als \"estimated\".\n   - ACHTUNG: Verwechsle NICHT Millionen und Milliarden.\n     8.5 Mio EUR = 8500000. NICHT 8500000000.\n\n4. TOCHTERGESELLSCHAFT-CHECK (KRITISCH):\n   - Prüfe auf North Data / Handelsregister: Ist diese Firma eine eigenständige GmbH\n     oder eine Tochter eines größeren Konzerns?\n   - Wenn Tochtergesellschaft: Nenne den MUTTERKONZERN und dessen Umsatz.\n     Beispiel: \"parent_company\": \"XY Holding AG\", \"parent_revenue_eur\": 900000000\n   - Eine Firma mit 50 Mitarbeitern aber Mutterkonzern-Umsatz >100 Mio ist KEIN echtes KMU.\n\n5. INHABERSCHAFT:\n   - Ergebnis aus Check 4: NUR EINES von:\n     \"inhabergeführt\", \"familienunternehmen\", \"management-geführt\", \"subsidiary\", \"group\", \"public\", \"unknown\"\n\n6. FIT-BEWERTUNG:\n   - Passt die Firma zum Käuferprofil? Ein Satz.\n\nAntworte als JSON mit diesen Keys:\n\"company_name\", \"website\", \"city\", \"country\",\n\"revenue_eur\" (ZAHL in EUR, nicht Text!), \"revenue_source\" (eines von: \"bundesanzeiger\", \"northdata\", \"creditreform\", \"estimated\", \"NOT FOUND\"),\n\"employees_count\" (GANZZAHL!), \"employees_source\" (eines von: \"linkedin\", \"website\", \"northdata\", \"estimated\", \"NOT FOUND\"),\n\"ownership_type\", \"parent_company\" (Name oder \"none\"), \"parent_revenue_eur\" (Zahl oder 0),\n\"ceo_name\", \"email\", \"phone\",\n\"impressum_url\", \"impressum_quote\",\n\"linkedin\", \"description\", \"why_interesting\", \"risks\",\n\"fit_verdict\", \"confidence\"\n\nRegeln:\n- \"confidence\": \"verified\", \"estimated\", oder \"low\"\n- \"fit_verdict\": \"GOOD FIT\", \"NEEDS RESEARCH\", oder \"NO FIT\" mit kurzem Grund\n- ERFINDE NIEMALS Namen, URLs oder Daten{{verify_extra}}\n\nAntworte NUR mit dem JSON-Objekt.\n"
+    "UK": {
+      "discovery": {
+        "search_archetypes": [
+          "{{industry}} SME Yorkshire Lancashire Midlands owner-managed Ltd",
+          "{{industry}} SME South East London Home Counties independent Ltd",
+          "{{industry}} SME Scotland Wales Northern Ireland family business",
+          "{{industry}} UK manufacturer kompass.co.uk yell.com independent Ltd",
+          "{{industry}} UK trade show exhibitor 2023 2024 Britain",
+          "{{industry}} UK trade association member SME manufacturer",
+          "{{industry}} business for sale UK succession Daltons Business",
+          "{{industry}} subcontractor specialist niche supplier owner-managed UK",
+          "{{industry}} SME North West East Anglia East Midlands Ltd independent",
+          "{{industry}} OEM technology partner system integrator owner-managed UK"
+        ],
+        "niche_suggestions": {
+          "1": "Industrial Maintenance",
+          "2": "Safety Inspections",
+          "3": "Machine Building",
+          "4": "Water Management",
+          "5": "CNC Manufacturing"
+        },
+        "niche_labels": "1. Industrial Maintenance  |  2. Safety Inspections\n  3. Machine Building        |  4. Water Management\n  5. CNC Manufacturing",
+        "system": "You are an M&A researcher. Search the web and return only companies whose websites you have verified exist. Never invent company names, websites, or data. If fewer verified companies exist than requested, return only confirmed ones.",
+        "user_template": "\nSearch query: {{archetype}}\n\nFind {{discovery_count}} independent SMEs (20–200 employees) in UK. Exclude subsidiaries, conglomerates, and publicly listed companies.{{discovery_extra}}\n\nRules:\n- Only include companies whose website you have accessed and verified.\n- If fewer than {{discovery_count}} companies exist in this exact niche, include adjacent suppliers or service providers (e.g. upstream equipment makers, specialist subcontractors).\n- If unsure about a company: omit it.\n- If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON array:\n[{\"name\": \"Company Name Ltd\", \"city\": \"City\", \"website\": \"www.example.co.uk\"}]\n"
+      },
+      "verify": {
+        "system": "You are an M&A analyst for UK SMEs. Respond ONLY with the requested JSON. Financial data must be pure integers — never text strings. If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.",
+        "user_template": "\nAnalyze \"{{company_name}}\" (industry: {{industry}}, UK) as an M&A acquisition target.\n\nBUYER PROFILE:\n- Revenue: {{rev_label}}\n- Employees: {{emp_label}}\n- Independent entity (Ltd/Plc), owner-led or professionally managed\n- Exclude subsidiaries of large groups, exclude publicly listed companies{{buyer_profile_extra}}\n\nSTEPS (execute in order):\n\n1. LEGAL NOTICE / ABOUT US:\n   - Search \"{{company_name}}\" website, then \"{{company_name}} Legal Notice\", then \"{{company_name}} About Us\"\n   - Extract: {{roles_str}} name (verbatim), email, phone, address\n   - impressum_url: output ONLY if the exact URL appears verbatim in retrieved source text. Never construct, guess, or infer URLs. If not found: \"NOT FOUND\".\n\n2. LINKEDIN:\n   - Search \"{{company_name}} LinkedIn\" for headcount and management\n\n3. FINANCIALS:\n   - Check Companies House for 2022–2024 filings\n   - revenue_eur: integer in EUR (e.g. 8500000 for €8.5M). NEVER return 0. If not found in public records, you MUST estimate as employees_count × 120000 and set revenue_source to \"estimated\". Zero is not a valid value.\n   - employees_count: integer only\n   - CRITICAL: Do not confuse millions and billions. €8.5M = 8500000, NOT 8500000000.\n\n4. SUBSIDIARY CHECK:\n   - Check Companies House: independent Ltd or subsidiary?\n   - If subsidiary: record parent_company name and parent_revenue_eur.\n\n5. OWNERSHIP:\n   - ownership_type: exactly one of: \"owner-managed\", \"family-owned\", \"management-led\", \"subsidiary\", \"group\", \"public\", \"unknown\"\n\n6. FIT:\n   - One sentence: does it match the buyer profile?\n\nRespond ONLY as JSON with these exact keys:\n\"company_name\", \"website\", \"city\", \"country\",\n\"revenue_eur\" (integer EUR), \"revenue_source\" (\"companies_house\"|\"creditreform\"|\"estimated\"|\"NOT FOUND\"),\n\"employees_count\" (integer), \"employees_source\" (\"linkedin\"|\"website\"|\"companies_house\"|\"estimated\"|\"NOT FOUND\"),\n\"ownership_type\", \"parent_company\" (name or \"none\"), \"parent_revenue_eur\" (integer or 0),\n\"ceo_name\", \"email\", \"phone\",\n\"impressum_url\", \"impressum_quote\",\n\"linkedin\", \"description\", \"why_interesting\", \"risks\",\n\"fit_verdict\", \"confidence\"\n\n- confidence: \"verified\" | \"estimated\" | \"low\"\n- fit_verdict: \"GOOD FIT\" | \"NEEDS RESEARCH\" | \"NO FIT\" + one-line reason\n- Never invent names, URLs, or data{{verify_extra}}\n"
+      },
+      "preflight": {
+        "system": "You are a financial fact-checker. Respond ONLY with JSON.",
+        "user_template": "Fact-check \"{{company_name}}\" ({{industry}}, UK).\nClaimed: revenue={{revenue_eur}} EUR, employees={{employees_count}}\n\nCheck Companies House (2022–2024):\n- Is revenue plausible for this headcount?\n- Is headcount accurate?\n- Is this a subsidiary of a larger group?\n\nIf you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON:\n{\"revenue_eur\": [corrected integer or 0], \"employees_count\": [corrected integer or 0], \"correction_note\": \"explanation\"}\n"
+      }
     },
-    "preflight": {
-      "system": "Du bist ein Finanz-Faktenprüfer. Antworte NUR mit JSON.",
-      "user_template": "Faktencheck für \"{{company_name}}\" ({{industry}}, DACH):\nBehauptet: Umsatz={{revenue_eur}} EUR, Mitarbeiter={{employees_count}}\n\nPrüfe auf Bundesanzeiger und North Data (2022-2024):\n1. Ist der Umsatz realistisch für diese Firmengröße?\n2. Stimmt die Mitarbeiterzahl?\n3. Ist die Firma vielleicht eine Tochtergesellschaft eines Konzerns?\n\nAntworte NUR als JSON:\n{\"revenue_eur\": [korrigierte Zahl oder 0], \"employees_count\": [korrigierte Zahl oder 0], \"correction_note\": \"Erklärung\"}\n"
+    "Benelux": {
+      "discovery": {
+        "search_archetypes": [
+          "{{industry}} MKB Noord-Brabant Gelderland familiebedrijf B.V.",
+          "{{industry}} MKB Noord-Holland Zuid-Holland Zeeland KVK",
+          "{{industry}} familiebedrijf Vlaanderen Antwerpen Gent Brugge",
+          "{{industry}} KMO Wallonië Brussel onafhankelijk SRL",
+          "{{industry}} Netherlands Belgium kompass.nl bedrijvengids onafhankelijk",
+          "{{industry}} vakbeurs deelnemer 2023 2024 Nederland België",
+          "{{industry}} branchevereniging lid MKB Nederland",
+          "{{industry}} bedrijfsovername opvolging familiebedrijf Benelux",
+          "{{industry}} loonproductie contractproductie nichespeler specialist Benelux",
+          "{{industry}} OEM technologiepartner systeemintegrator familiebedrijf Benelux"
+        ],
+        "niche_suggestions": {
+          "1": "Industrieel onderhoud",
+          "2": "Veiligheidsinspecties",
+          "3": "Machinebouw",
+          "4": "Water- en afvalwatertechniek",
+          "5": "CNC-bewerking"
+        },
+        "niche_labels": "1. Industrial Maintenance  |  2. Safety Inspections\n  3. Machine Building        |  4. Water Management\n  5. CNC Manufacturing",
+        "system": "You are an M&A researcher. Search the web and return only companies whose websites you have verified exist. Never invent company names, websites, or data. If fewer verified companies exist than requested, return only confirmed ones.",
+        "user_template": "\nSearch query: {{archetype}}\n\nFind {{discovery_count}} independent SMEs (20–200 employees) in Benelux (Netherlands, Belgium, Luxembourg). Exclude subsidiaries, conglomerates, and publicly listed companies.{{discovery_extra}}\n\nRules:\n- Only include companies whose website you have accessed and verified.\n- If fewer than {{discovery_count}} companies exist in this exact niche, include adjacent suppliers or service providers (e.g. upstream equipment makers, specialist subcontractors).\n- If unsure about a company: omit it.\n- If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON array:\n[{\"name\": \"Bedrijfsnaam B.V.\", \"city\": \"Stad\", \"website\": \"www.example.nl\"}]\n"
+      },
+      "verify": {
+        "system": "You are an M&A analyst for Benelux SMEs. Respond ONLY with the requested JSON. Financial data must be pure integers — never text strings. If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.",
+        "user_template": "\nAnalyze \"{{company_name}}\" (industry: {{industry}}, Benelux) as an M&A acquisition target.\n\nBUYER PROFILE:\n- Revenue: {{rev_label}}\n- Employees: {{emp_label}}\n- Independent entity (B.V./N.V./SRL/BVBA), owner-led or professionally managed\n- Exclude subsidiaries of large groups, exclude publicly listed companies{{buyer_profile_extra}}\n\nSTEPS (execute in order):\n\n1. CONTACT / OVER ONS:\n   - Search \"{{company_name}}\" website, then \"{{company_name}} Contact\", then \"{{company_name}} Over ons\"\n   - Extract: {{roles_str}} name (verbatim), email, phone, address\n   - impressum_url: output ONLY if the exact URL appears verbatim in retrieved source text. Never construct, guess, or infer URLs. If not found: \"NOT FOUND\".\n\n2. LINKEDIN:\n   - Search \"{{company_name}} LinkedIn\" for headcount and management\n\n3. FINANCIALS:\n   - Check KVK (Kamer van Koophandel) or KBO (Kruispuntbank van Ondernemingen) for 2022–2024 filings\n   - revenue_eur: integer in EUR (e.g. 8500000 for €8.5M). NEVER return 0. If not found in public records, you MUST estimate as employees_count × 120000 and set revenue_source to \"estimated\". Zero is not a valid value.\n   - employees_count: integer only\n   - CRITICAL: Do not confuse millions and billions. €8.5M = 8500000, NOT 8500000000.\n\n4. SUBSIDIARY CHECK:\n   - Check KVK or KBO: independent B.V./SRL or subsidiary?\n   - If subsidiary: record parent_company name and parent_revenue_eur.\n\n5. OWNERSHIP:\n   - ownership_type: exactly one of: \"familiebedrijf\", \"management-geführt\", \"subsidiary\", \"group\", \"public\", \"unknown\"\n\n6. FIT:\n   - One sentence: does it match the buyer profile?\n\nRespond ONLY as JSON with these exact keys:\n\"company_name\", \"website\", \"city\", \"country\",\n\"revenue_eur\" (integer EUR), \"revenue_source\" (\"kvk\"|\"kbo\"|\"creditreform\"|\"estimated\"|\"NOT FOUND\"),\n\"employees_count\" (integer), \"employees_source\" (\"linkedin\"|\"website\"|\"kvk\"|\"kbo\"|\"estimated\"|\"NOT FOUND\"),\n\"ownership_type\", \"parent_company\" (name or \"none\"), \"parent_revenue_eur\" (integer or 0),\n\"ceo_name\", \"email\", \"phone\",\n\"impressum_url\", \"impressum_quote\",\n\"linkedin\", \"description\", \"why_interesting\", \"risks\",\n\"fit_verdict\", \"confidence\"\n\n- confidence: \"verified\" | \"estimated\" | \"low\"\n- fit_verdict: \"GOOD FIT\" | \"NEEDS RESEARCH\" | \"NO FIT\" + one-line reason\n- Never invent names, URLs, or data{{verify_extra}}\n"
+      },
+      "preflight": {
+        "system": "You are a financial fact-checker. Respond ONLY with JSON.",
+        "user_template": "Fact-check \"{{company_name}}\" ({{industry}}, Benelux).\nClaimed: revenue={{revenue_eur}} EUR, employees={{employees_count}}\n\nCheck KVK or KBO (2022–2024):\n- Is revenue plausible for this headcount?\n- Is headcount accurate?\n- Is this a subsidiary of a larger group?\n\nIf you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON:\n{\"revenue_eur\": [corrected integer or 0], \"employees_count\": [corrected integer or 0], \"correction_note\": \"explanation\"}\n"
+      }
+    },
+    "Custom": {
+      "discovery": {
+        "search_archetypes": [
+          "{{industry}} SME manufacturer {{region}} owner-managed independent",
+          "{{industry}} SME {{region}} official business registry independent",
+          "{{industry}} family business {{region}} mid-market 20-200 employees",
+          "{{industry}} SME {{region}} trade directory independent supplier",
+          "{{industry}} {{region}} trade show exhibitor 2023 2024 independent",
+          "{{industry}} {{region}} industry association member SME",
+          "{{industry}} business for sale {{region}} succession owner exit",
+          "{{industry}} subcontractor niche specialist {{region}} owner-managed",
+          "{{industry}} contract manufacturer {{region}} independent SME",
+          "{{industry}} OEM technology partner system integrator {{region}} independent"
+        ],
+        "niche_suggestions": {
+          "1": "Industrial Maintenance",
+          "2": "Safety Inspections",
+          "3": "Machine Building",
+          "4": "Water Management",
+          "5": "CNC Manufacturing"
+        },
+        "niche_labels": "  1. Industrial Maintenance  |  2. Safety Inspections\n  3. Machine Building        |  4. Water Management\n  5. CNC Manufacturing",
+        "system": "You are an M&A researcher. Search the web and return only companies whose websites you have verified exist. Never invent company names, websites, or data. If fewer verified companies exist than requested, return only confirmed ones.",
+        "user_template": "\nSearch query: {{archetype}}\n\nFind {{discovery_count}} independent SMEs (20–200 employees) in {{region}}. Exclude subsidiaries, conglomerates, and publicly listed companies.{{discovery_extra}}\n\nRules:\n- Only include companies whose website you have accessed and verified.\n- If fewer than {{discovery_count}} companies exist in this exact niche, include adjacent suppliers or service providers (e.g. upstream equipment makers, specialist subcontractors).\n- If unsure about a company: omit it.\n- If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON array:\n[{\"name\": \"Company Name\", \"city\": \"City\", \"website\": \"www.example.com\"}]\n"
+      },
+      "verify": {
+        "system": "You are an M&A analyst for independent SMEs. Respond ONLY with the requested JSON. Financial data must be pure integers — never text strings. If you cannot find reliable sources, state 'NOT FOUND' rather than guessing.",
+        "user_template": "\nAnalyze \"{{company_name}}\" (industry: {{industry}}, {{region}}) as an M&A acquisition target.\n\nBUYER PROFILE:\n- Revenue: {{rev_label}}\n- Employees: {{emp_label}}\n- Independent limited liability company, owner-led or professionally managed\n- Exclude subsidiaries of large groups, exclude publicly listed companies{{buyer_profile_extra}}\n\nSTEPS (execute in order):\n\n1. LEGAL NOTICE / ABOUT US:\n   - Search \"{{company_name}}\" website, then \"{{company_name}} Legal Notice\", then \"{{company_name}} About Us\", then \"{{company_name}} Contact\"\n   - Extract: {{roles_str}} name (verbatim), email, phone, address\n   - impressum_url: output ONLY if the exact URL appears verbatim in retrieved source text. Never construct, guess, or infer URLs. If not found: \"NOT FOUND\".\n\n2. LINKEDIN:\n   - Search \"{{company_name}} LinkedIn\" for headcount and management\n\n3. FINANCIALS:\n   - Check the official national corporate registry for {{region}} for 2022–2024 filings\n   - revenue_eur: integer in EUR (e.g. 8500000 for €8.5M). NEVER return 0. If not found in public records, you MUST estimate as employees_count × 120000 and set revenue_source to \"estimated\". Zero is not a valid value.\n   - employees_count: integer only\n   - CRITICAL: Do not confuse millions and billions. €8.5M = 8500000, NOT 8500000000.\n\n4. SUBSIDIARY CHECK:\n   - Check the official national corporate registry: independent entity or subsidiary?\n   - If subsidiary: record parent_company name and parent_revenue_eur.\n\n5. OWNERSHIP:\n   - ownership_type: exactly one of: \"owner-managed\", \"family-owned\", \"management-led\", \"subsidiary\", \"group\", \"public\", \"unknown\"\n\n6. FIT:\n   - One sentence: does it match the buyer profile?\n\nRespond ONLY as JSON with these exact keys:\n\"company_name\", \"website\", \"city\", \"country\",\n\"revenue_eur\" (integer EUR), \"revenue_source\" (\"registry\"|\"creditreform\"|\"estimated\"|\"NOT FOUND\"),\n\"employees_count\" (integer), \"employees_source\" (\"linkedin\"|\"website\"|\"registry\"|\"estimated\"|\"NOT FOUND\"),\n\"ownership_type\", \"parent_company\" (name or \"none\"), \"parent_revenue_eur\" (integer or 0),\n\"ceo_name\", \"email\", \"phone\",\n\"impressum_url\", \"impressum_quote\",\n\"linkedin\", \"description\", \"why_interesting\", \"risks\",\n\"fit_verdict\", \"confidence\"\n\n- confidence: \"verified\" | \"estimated\" | \"low\"\n- fit_verdict: \"GOOD FIT\" | \"NEEDS RESEARCH\" | \"NO FIT\" + one-line reason\n- Never invent names, URLs, or data{{verify_extra}}\n"
+      },
+      "preflight": {
+        "system": "You are a financial fact-checker. Respond ONLY with JSON.",
+        "user_template": "Fact-check \"{{company_name}}\" ({{industry}}, {{region}}).\nClaimed: revenue={{revenue_eur}} EUR, employees={{employees_count}}\n\nCheck the official national corporate registry for {{region}} (2022–2024):\n- Is revenue plausible for this headcount?\n- Is headcount accurate?\n- Is this a subsidiary of a larger group?\n\nIf you cannot find reliable sources, state 'NOT FOUND' rather than guessing.\n\nRespond ONLY as JSON:\n{\"revenue_eur\": [corrected integer or 0], \"employees_count\": [corrected integer or 0], \"correction_note\": \"explanation\"}\n"
+      }
     }
   }
 }

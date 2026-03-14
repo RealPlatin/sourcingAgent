@@ -8,6 +8,11 @@ import time
 import datetime
 import os
 import requests
+try:
+    import openai as _openai_lib
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    _OPENAI_AVAILABLE = False
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 from dotenv import load_dotenv
@@ -19,6 +24,7 @@ from googleapiclient.discovery import build
 # --- ENV + API CLIENTS ---
 load_dotenv()
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 CONFIG_FILE = 'config.json'
 LOG_FILE = 'Session_Log.md'
@@ -82,10 +88,7 @@ _config: dict = {}
 if os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, 'r') as _f:
         _config = json.load(_f)
-_prompts = _config.get("prompts", {})
-PROMPT_BUYER_PROFILE_EXTRA: str = _prompts.get("buyer_profile_extra", "")
-PROMPT_DISCOVERY_EXTRA: str = _prompts.get("discovery_extra", "")
-PROMPT_VERIFY_EXTRA: str = _prompts.get("verify_extra", "")
+_active_prompts: dict = {}   # populated at runtime after region selection
 
 
 def render_template(template: str, **kwargs) -> str:
@@ -286,7 +289,9 @@ class SheetState:
 
     def add_to_forbidden(self, company_name: str, website: str = None):
         name = company_name.strip().lower()
-        if name and name not in ("not found", "unknown", ""):
+        _is_junk = (not name or name in ("not found", "unknown", "")
+                    or name.startswith("http") or "://" in name or name.startswith("www."))
+        if not _is_junk:
             self.forbidden_names.add(name)
         if website:
             domain = extract_domain(website)
@@ -401,8 +406,11 @@ def extract_json_array(raw: str) -> list:
 
     code_block = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', cleaned)
     if code_block:
+        inner = code_block.group(1).strip()
+        if inner.upper() == "NOT FOUND" or inner == "":
+            return []  # Perplexity signals no results — not a parse error
         try:
-            result = json.loads(code_block.group(1).strip())
+            result = json.loads(inner)
             if isinstance(result, list):
                 return result
         except json.JSONDecodeError:
@@ -423,6 +431,9 @@ def extract_json_array(raw: str) -> list:
 def extract_json_object(raw: str) -> dict | None:
     if not raw:
         return None
+    # Strip markdown code fences and fix unquoted NOT FOUND values
+    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip(), flags=re.DOTALL)
+    raw = re.sub(r':\s*NOT FOUND\b', ': "NOT FOUND"', raw)
     try:
         result = json.loads(raw.strip())
         if isinstance(result, dict):
@@ -443,7 +454,8 @@ def extract_json_object(raw: str) -> dict | None:
     end = raw.rfind('}')
     if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(raw[start:end + 1])
+            cleaned_obj = re.sub(r':\s*NOT FOUND\b', ': "NOT FOUND"', raw[start:end + 1])
+            return json.loads(cleaned_obj)
         except json.JSONDecodeError:
             pass
 
@@ -465,10 +477,10 @@ def extract_json_object(raw: str) -> dict | None:
 # 5. DISCOVERY — Search-oriented, not list-from-memory
 # ============================================================
 # Rotating search archetypes to get diverse results
-SEARCH_ARCHETYPES: list = _config.get("prompts", {}).get("discovery", {}).get("search_archetypes", [])
+SEARCH_ARCHETYPES: list = []   # dynamically set from _active_prompts in run_ma_agent_loop
 
 
-def discover_companies(industry: str, state: SheetState, batch_num: int) -> list[dict]:
+def discover_companies(industry: str, state: SheetState, batch_num: int, region: str = "") -> list[dict]:
     """Search-oriented discovery — asks Perplexity to SEARCH, not to list from memory.
 
     Args:
@@ -480,18 +492,21 @@ def discover_companies(industry: str, state: SheetState, batch_num: int) -> list
         List of dicts with at minimum {"company_name": str, "website": str}.
     """
     # Rotate archetype based on batch number, resolve {industry} placeholder
+    _archetypes = _active_prompts["discovery"]["search_archetypes"]
     archetype = render_template(
-        SEARCH_ARCHETYPES[batch_num % len(SEARCH_ARCHETYPES)],
+        _archetypes[batch_num % len(_archetypes)],
         industry=industry,
+        region=region,
     )
 
-    _disc = _config["prompts"]["discovery"]
+    _disc = _active_prompts["discovery"]
     system_prompt = _disc["system"]
     user_prompt = render_template(
         _disc["user_template"],
         archetype=archetype,
         discovery_count=str(DISCOVERY_COUNT),
-        discovery_extra=f"\n{PROMPT_DISCOVERY_EXTRA}" if PROMPT_DISCOVERY_EXTRA else "",
+        discovery_extra="",
+        region=region,
     )
     raw = perplexity_call(system_prompt, user_prompt)
     if not raw:
@@ -507,7 +522,7 @@ def discover_companies(industry: str, state: SheetState, batch_num: int) -> list
         else:
             continue
 
-        if not name:
+        if not name or name.strip().lower() in ("not found", "unknown", "n/a", "keine angabe"):
             continue
 
         if isinstance(item, dict):
@@ -523,7 +538,7 @@ def discover_companies(industry: str, state: SheetState, batch_num: int) -> list
 # ============================================================
 # 6. VERIFICATION — M&A Expert with Impressum + LinkedIn priority
 # ============================================================
-def verify_company(company_name: str, industry: str) -> dict | None:
+def verify_company(company_name: str, industry: str, region: str = "") -> dict | None:
     """Verify a candidate company via Perplexity and return structured M&A data.
 
     Checks ownership structure, revenue, employee count, CEO/contact, and
@@ -540,7 +555,7 @@ def verify_company(company_name: str, industry: str) -> dict | None:
     rev_label = CRITERIA.revenue_label()
     emp_label = CRITERIA.employee_label()
 
-    _ver = _config["prompts"]["verify"]
+    _ver = _active_prompts["verify"]
     system_prompt = _ver["system"]
     user_prompt = render_template(
         _ver["user_template"],
@@ -549,8 +564,9 @@ def verify_company(company_name: str, industry: str) -> dict | None:
         rev_label=rev_label,
         emp_label=emp_label,
         roles_str=roles_str,
-        buyer_profile_extra=f"\n{PROMPT_BUYER_PROFILE_EXTRA}" if PROMPT_BUYER_PROFILE_EXTRA else "",
-        verify_extra=f"\n{PROMPT_VERIFY_EXTRA}" if PROMPT_VERIFY_EXTRA else "",
+        buyer_profile_extra="",
+        verify_extra="",
+        region=region,
     )
     raw = perplexity_call(system_prompt, user_prompt)
     if not raw:
@@ -669,7 +685,7 @@ def _is_missing(value) -> bool:
     return value in (None, "", "NOT FOUND", "UNVERIFIED", "not found", "N/A", "n/a")
 
 
-def preflight_check(data: dict, company_name: str, industry: str) -> tuple[dict, bool]:
+def preflight_check(data: dict, company_name: str, industry: str, region: str = "") -> tuple[dict, bool]:
     """Fact-check implausible Rev/FTE ratios via a targeted Perplexity call.
 
     Only fires when the ratio is outside the 30k–500k EUR/FTE range.
@@ -696,7 +712,7 @@ def preflight_check(data: dict, company_name: str, industry: str) -> tuple[dict,
     write_log(f"PRE-FLIGHT: {company_name} Rev/FTE={ratio:,.0f}€ is suspicious — requesting fact-check")
     print(f"    [PRE-FLIGHT] Rev/FTE={ratio:,.0f}€ suspicious — fact-checking...")
 
-    _pre = _config["prompts"]["preflight"]
+    _pre = _active_prompts["preflight"]
     raw = perplexity_call(
         _pre["system"],
         render_template(
@@ -705,6 +721,7 @@ def preflight_check(data: dict, company_name: str, industry: str) -> tuple[dict,
             industry=industry,
             revenue_eur=str(data.get("revenue", data.get("revenue_eur"))),
             employees_count=str(data.get("employees", data.get("employees_count"))),
+            region=region,
         ),
     )
     if raw:
@@ -831,12 +848,50 @@ def map_to_sheet(data: dict, industry: str) -> dict:
     }
 
 
+def generate_sub_niches_openai(broad_industry: str) -> list[str] | None:
+    """Generate 5 specific M&A sub-niches via GPT-4o-mini.
+
+    Args:
+        broad_industry: User-supplied industry string.
+
+    Returns:
+        List of 5 niche strings, or None on any failure.
+    """
+    if not _OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        return None
+    client = _openai_lib.OpenAI(api_key=OPENAI_API_KEY)
+    system_prompt = (
+        "You are an elite M&A advisor. The user provides a broad industry. "
+        "Generate 5 highly specific, highly fragmented, and profitable sub-niches "
+        "for SME acquisitions in Europe. Output ONLY a valid JSON list of 5 strings. "
+        "No markdown formatting like ```json, just the raw array."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": broad_industry},
+            ],
+            temperature=0.7,
+            max_tokens=300,
+        )
+        raw = response.choices[0].message.content.strip()
+        niches = json.loads(raw)
+        if isinstance(niches, list) and len(niches) == 5:
+            return [str(n) for n in niches]
+        return None
+    except Exception as exc:
+        print(f"  [Warning] Sub-niche expansion failed: {exc}")
+        return None
+
+
 # ============================================================
 # 9. MAIN PIPELINE — Simple, linear, no leads lost
 # ============================================================
 def run_ma_agent_loop():
     print("\n" + "=" * 55)
-    print("  M&A COMMAND CENTER V4.2 — INVESTMENT GRADE")
+    print("  M&A COMMAND CENTER V5.1 — INVESTMENT GRADE")
     print("=" * 55)
     print(f"  Revenue: {CRITERIA.revenue_label()} | Employees: {CRITERIA.employee_label()}")
     print(f"  Rev/FTE: €{CRITERIA.rev_per_emp_min:,.0f}-{CRITERIA.rev_per_emp_max:,.0f}")
@@ -850,21 +905,66 @@ def run_ma_agent_loop():
 
     state = SheetState(service, sheet_id)
 
+    # --- REGION SELECTION ---
+    print("\nSelect Target Region:")
+    print("  1. DACH    (Germany, Austria, Switzerland)")
+    print("  2. UK      (United Kingdom)")
+    print("  3. Benelux (Netherlands, Belgium, Luxembourg)")
+    print("  OR type a custom region name (e.g. 'France', 'Nordics')")
+    _region_map = {"1": "DACH", "2": "UK", "3": "Benelux"}
+    while True:
+        region_input = input("\nChoose 1-3 or custom name: ").strip()
+        if not region_input:
+            print("  Input cannot be empty. Please try again.")
+            continue
+        if region_input in _region_map:
+            region = _region_map[region_input]
+            custom_region_name = region
+        elif region_input in _config["prompts"]:
+            region = region_input
+            custom_region_name = region
+        else:
+            region = "Custom"
+            custom_region_name = region_input
+        break
+    global _active_prompts
+    _active_prompts = _config["prompts"][region]
+    print(f"  Region: {custom_region_name}")
+
+    niche_map = _active_prompts["discovery"].get("niche_suggestions", {})
+    niche_labels = _active_prompts["discovery"].get("niche_labels", "")
     print("\nNiche suggestions:")
-    print("  1. Industrial Maintenance  |  2. Safety Inspections")
-    print("  3. Machine Builder         |  4. Water Management")
-    print("  5. CNC Manufacturing")
+    print(niche_labels)
     user_input = input("\nChoose 1-5 OR type your own: ").strip()
-    niche_map = {
-        "1": "Industrielle Instandhaltung", "2": "Arbeitssicherheit und Prüfdienstleistungen",
-        "3": "Maschinenbau und Sondermaschinenbau", "4": "Wasser- und Abwassertechnik",
-        "5": "CNC-Fertigung und Zerspanung"
-    }
     target_industry = niche_map.get(user_input, user_input)
-    count_needed = int(input("How many 'Ready to Call' targets? "))
+    # --- AUTO-NICHE EXPANSION ---
+    if _OPENAI_AVAILABLE and OPENAI_API_KEY:
+        expand = input("\nWant AI sub-niche expansion? (y/n): ").strip().lower()
+        if expand == "y":
+            print(f"  Generating sub-niches for '{target_industry}' via GPT-4o-mini...")
+            sub_niches = generate_sub_niches_openai(target_industry)
+            if sub_niches:
+                print("\nSub-niche options:")
+                for i, niche in enumerate(sub_niches, 1):
+                    print(f"  {i}. {niche}")
+                pick = input("\nChoose 1-5 OR type custom (Enter = keep original): ").strip()
+                sub_map = {str(i): sub_niches[i - 1] for i in range(1, 6)}
+                if pick in sub_map:
+                    target_industry = sub_map[pick]
+                elif pick:
+                    target_industry = pick
+                print(f"  Using: {target_industry}")
+    while True:
+        try:
+            count_needed = int(input("How many 'Ready to Call' targets? "))
+            if count_needed > 0:
+                break
+            print("  Must be a positive integer.")
+        except ValueError:
+            print("  Invalid input — please enter a number.")
 
     write_log("--- NEUE SESSION GESTARTET ---")
-    write_log(f"Nische: {target_industry} | Ziel: {count_needed} | Pipeline: V4.2 | "
+    write_log(f"Nische: {target_industry} | Region: {custom_region_name} | Ziel: {count_needed} | Pipeline: V5.1 | "
               f"Rev: {CRITERIA.revenue_label()} | Emp: {CRITERIA.employee_label()} | "
               f"Rev/FTE: {CRITERIA.rev_per_emp_min}-{CRITERIA.rev_per_emp_max}")
 
@@ -892,13 +992,23 @@ def run_ma_agent_loop():
         print(f"{'='*55}")
 
         # --- PHASE 1: Discovery ---
-        print(f"\n  Discovering companies (archetype {(batch_num % len(SEARCH_ARCHETYPES)) + 1})...")
-        candidates = discover_companies(target_industry, state, batch_num)
+        _arc_count = len(_active_prompts["discovery"]["search_archetypes"])
+        print(f"\n  Discovering companies (archetype {(batch_num % _arc_count) + 1}/{_arc_count})...")
+        candidates = discover_companies(target_industry, state, batch_num, region=custom_region_name)
         api_costs += COST_PERPLEXITY
 
         if not candidates:
-            print("  Discovery returned nothing. Retrying with next archetype...")
-            consecutive_failures += 1
+            smart_retry += 1
+            if smart_retry <= SMART_RETRY_MAX:
+                _n = len(_active_prompts["discovery"]["search_archetypes"])
+                batch_num += _n // 2
+                write_log(f"Zero-candidate batch — Smart-Retry {smart_retry}/{SMART_RETRY_MAX}, jumping to archetype {batch_num % _n}")
+                print(f"  Discovery returned nothing. Smart-Retry {smart_retry}/{SMART_RETRY_MAX}...")
+            else:
+                consecutive_failures += 1
+                smart_retry = 0
+                write_log(f"Zero-candidate Smart-Retry exhausted — consecutive_failures={consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
+                print("  Discovery returned nothing. Consecutive failure logged.")
             continue
 
         stats["discovered"] += len(candidates)
@@ -920,7 +1030,14 @@ def run_ma_agent_loop():
 
         if not unique:
             print("  All candidates were duplicates.")
-            consecutive_failures += 1
+            smart_retry += 1
+            write_log(f"BATCH {batch_num}: all dupes — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
+            if smart_retry >= SMART_RETRY_MAX:
+                consecutive_failures += 1
+                smart_retry = 0
+                write_log(f"Smart-Retry exhausted — consecutive_failures={consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
+            else:
+                batch_num += len(_active_prompts["discovery"]["search_archetypes"]) // 2
             continue
 
         print(f"  {len(unique)} unique candidates to verify\n")
@@ -935,7 +1052,7 @@ def run_ma_agent_loop():
             name = candidate.get("name", "Unknown")
             print(f"  [{i+1}/{len(unique)}] Verifying: {name}...")
 
-            verified = verify_company(name, target_industry)
+            verified = verify_company(name, target_industry, region=custom_region_name)
             api_costs += COST_PERPLEXITY
             stats["verified"] += 1
 
@@ -980,7 +1097,7 @@ def run_ma_agent_loop():
             write_log(f"RAW FINANCIALS: {v_name} | Rev={raw_rev} | Emp={raw_emp} | Own={raw_own} | Parent={raw_parent}")
 
             # --- PRE-FLIGHT: Fact-check absurd Rev/FTE ratios ---
-            verified, did_preflight = preflight_check(verified, v_name, target_industry)
+            verified, did_preflight = preflight_check(verified, v_name, target_industry, region=custom_region_name)
             if did_preflight:
                 api_costs += COST_PERPLEXITY
 
@@ -1034,8 +1151,9 @@ def run_ma_agent_loop():
                 print(f"  Smart-Retry exhausted — failure count: {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
             else:
                 # Force archetype diversity: skip ahead by half the archetype list
-                batch_num += len(SEARCH_ARCHETYPES) // 2
-                write_log(f"Smart-Retry: jumping to archetype index {batch_num % len(SEARCH_ARCHETYPES)}")
+                _n_arc = len(_active_prompts["discovery"]["search_archetypes"])
+                batch_num += _n_arc // 2
+                write_log(f"Smart-Retry: jumping to archetype index {batch_num % _n_arc}")
 
     # --- COMMIT ---
     print(f"\n{'='*55}")
