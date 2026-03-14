@@ -1156,6 +1156,7 @@ def run_ma_agent_loop():
     consecutive_failures = 0
     smart_retry = 0
     batch_num = 0
+    display_batch = 0
     _niche_broadened = False
 
     while targets_done < count_needed:
@@ -1185,10 +1186,11 @@ def run_ma_agent_loop():
             smart_retry = 0
 
         batch_num += 1
+        display_batch += 1
         remaining = count_needed - targets_done
 
         print(f"\n{'='*55}")
-        print(f"  BATCH {batch_num} | Need {remaining} more | "
+        print(f"  BATCH {display_batch} | Need {remaining} more | "
               f"Buffered: {state.buffer_count()} | Known: {state.forbidden_count()}")
         print(f"{'='*55}")
 
@@ -1199,12 +1201,13 @@ def run_ma_agent_loop():
         api_costs += COST_PERPLEXITY
 
         if not candidates:
+            _cur_arc = (batch_num % _arc_count) + 1
             smart_retry += 1
             if smart_retry <= SMART_RETRY_MAX:
                 _n = len(_active_prompts["discovery"]["search_archetypes"])
                 batch_num += _n // 2
-                write_log(f"Zero-candidate batch — Smart-Retry {smart_retry}/{SMART_RETRY_MAX}, jumping to archetype {batch_num % _n}")
-                print(f"  Discovery returned nothing. Smart-Retry {smart_retry}/{SMART_RETRY_MAX}...")
+                write_log(f"Skipping Archetype {_cur_arc} — Zero Candidates (Smart-Retry {smart_retry}/{SMART_RETRY_MAX})")
+                print(f"  LOG: Skipping Archetype {_cur_arc} — Niche Exhausted (Smart-Retry {smart_retry}/{SMART_RETRY_MAX})")
             else:
                 consecutive_failures += 1
                 smart_retry = 0
@@ -1240,15 +1243,19 @@ def run_ma_agent_loop():
                 state.add_to_forbidden(name)  # name only — no domain yet
 
         if not unique:
+            _arc_count_local = len(_active_prompts["discovery"]["search_archetypes"])
+            _cur_arc = (batch_num % _arc_count_local) + 1
             print("  All candidates were duplicates.")
             smart_retry += 1
-            write_log(f"BATCH {batch_num}: all dupes — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
+            write_log(f"BATCH {display_batch}: all dupes — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
             if smart_retry >= SMART_RETRY_MAX:
                 consecutive_failures += 1
                 smart_retry = 0
                 write_log(f"Smart-Retry exhausted — consecutive_failures={consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
             else:
-                batch_num += len(_active_prompts["discovery"]["search_archetypes"]) // 2
+                batch_num += _arc_count_local // 2
+                write_log(f"Skipping Archetype {_cur_arc} — All Results Known (Smart-Retry {smart_retry}/{SMART_RETRY_MAX})")
+                print(f"  LOG: Skipping Archetype {_cur_arc} — All Results Known (Smart-Retry {smart_retry}/{SMART_RETRY_MAX})")
             continue
 
         # V5.9: Early Niche Pivot if >80% of the batch are duplicates
@@ -1415,7 +1422,7 @@ def run_ma_agent_loop():
             smart_retry = 0
         else:
             smart_retry += 1
-            write_log(f"BATCH {batch_num}: zero useful results — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
+            write_log(f"BATCH {display_batch}: zero useful results — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
             print(f"  Batch produced no useful results — smart_retry: {smart_retry}/{SMART_RETRY_MAX}")
             if smart_retry >= SMART_RETRY_MAX:
                 consecutive_failures += 1
@@ -1426,7 +1433,7 @@ def run_ma_agent_loop():
                 # Force archetype diversity: skip ahead by half the archetype list
                 _n_arc = len(_active_prompts["discovery"]["search_archetypes"])
                 batch_num += _n_arc // 2
-                write_log(f"Smart-Retry: jumping to archetype index {batch_num % _n_arc}")
+                write_log(f"Smart-Retry (BATCH {display_batch}): jumping to archetype index {batch_num % _n_arc}")
 
     # --- COMMIT ---
     print(f"\n{'='*55}")
