@@ -26,6 +26,7 @@ DISCOVERY_COUNT = 10
 MAX_CONSECUTIVE_FAILURES = 5
 COST_PERPLEXITY = 0.005
 PERPLEXITY_RETRIES = 2
+SMART_RETRY_MAX = 2
 
 
 # ============================================================
@@ -87,6 +88,25 @@ PROMPT_DISCOVERY_EXTRA: str = _prompts.get("discovery_extra", "")
 PROMPT_VERIFY_EXTRA: str = _prompts.get("verify_extra", "")
 
 
+def render_template(template: str, **kwargs) -> str:
+    """Replace {{variable}} placeholders in a template string.
+
+    Uses double-brace syntax so single braces (e.g. in JSON examples) are
+    kept verbatim without escaping.
+
+    Args:
+        template: String with {{var_name}} placeholders.
+        **kwargs: Key-value pairs to substitute.
+
+    Returns:
+        Template with all known placeholders replaced.
+    """
+    result = template
+    for key, value in kwargs.items():
+        result = result.replace("{{" + key + "}}", str(value))
+    return result
+
+
 def write_log(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
@@ -112,6 +132,14 @@ def authenticate_google_sheets():
 
 
 def extract_domain(url_or_name: str) -> str | None:
+    """Extract the bare domain from a URL or company website string.
+
+    Args:
+        url_or_name: Raw URL or domain string (e.g. "https://www.example.de").
+
+    Returns:
+        Lowercase domain without 'www.' prefix, or None if unparseable.
+    """
     if not url_or_name or str(url_or_name) in ("NOT FOUND", "UNVERIFIED", ""):
         return None
     s = str(url_or_name).strip().lower()
@@ -216,6 +244,18 @@ class SheetState:
         return {t for t in tokens if len(t) > 2 and t not in SheetState.LEGAL_SUFFIXES}
 
     def is_duplicate(self, company_name: str, website: str = None) -> tuple[bool, str]:
+        """Check if a company already exists in the forbidden set.
+
+        Uses exact match, substring containment, and token-set overlap to
+        catch German legal suffix variations and word-order permutations.
+
+        Args:
+            company_name: Company name to check.
+            website: Optional website URL; domain is also checked against known domains.
+
+        Returns:
+            Tuple of (is_dup: bool, reason: str).
+        """
         name_lower = company_name.strip().lower()
         if name_lower in ("not found", "unknown", "n/a", ""):
             return False, ""
@@ -308,6 +348,16 @@ class SheetState:
 # 3. PERPLEXITY API — with retry + JSON extraction
 # ============================================================
 def perplexity_call(system_prompt, user_prompt, retries=PERPLEXITY_RETRIES):
+    """Send a prompt to the Perplexity sonar-pro API with retry logic.
+
+    Args:
+        system_prompt: System-role message defining the model's behavior.
+        user_prompt: User-role message with the actual query.
+        retries: Number of retry attempts on failure (default: PERPLEXITY_RETRIES).
+
+    Returns:
+        Response content string, or None if all attempts fail.
+    """
     url = "https://api.perplexity.ai/chat/completions"
     headers = {"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -415,48 +465,34 @@ def extract_json_object(raw: str) -> dict | None:
 # 5. DISCOVERY — Search-oriented, not list-from-memory
 # ============================================================
 # Rotating search archetypes to get diverse results
-SEARCH_ARCHETYPES = [
-    'Suche nach Mitgliederlisten von Branchenverbänden für "{industry}" in Deutschland.',
-    'Finde inhabergeführte Unternehmen im Bereich "{industry}" in Süddeutschland (Bayern, Baden-Württemberg).',
-    'Suche nach kleinen und mittleren "{industry}"-Firmen in NRW, Niedersachsen oder Hessen.',
-    'Welche Familienunternehmen gibt es im Bereich "{industry}" in Österreich und der Schweiz?',
-    'Finde Hidden Champions im Bereich "{industry}" in Ostdeutschland (Sachsen, Thüringen, Brandenburg).',
-    'Suche auf Northdata, Wer-liefert-was oder Industrystock nach "{industry}"-Unternehmen im DACH-Raum.',
-    'Welche inhabergeführten Firmen bieten "{industry}"-Dienstleistungen in Norddeutschland an?',
-]
+SEARCH_ARCHETYPES: list = _config.get("prompts", {}).get("discovery", {}).get("search_archetypes", [])
 
 
 def discover_companies(industry: str, state: SheetState, batch_num: int) -> list[dict]:
-    """Search-oriented discovery — asks Perplexity to SEARCH, not to list from memory."""
-    forbidden_str = ", ".join(list(state.forbidden_names)[-150:])
+    """Search-oriented discovery — asks Perplexity to SEARCH, not to list from memory.
 
-    # Rotate archetype based on batch number
-    archetype = SEARCH_ARCHETYPES[batch_num % len(SEARCH_ARCHETYPES)].format(industry=industry)
+    Args:
+        industry: Target industry/niche string (e.g. "Industriemontage").
+        state: Active SheetState used for forbidden-name deduplication.
+        batch_num: Current batch index; used to rotate SEARCH_ARCHETYPES.
 
-    system_prompt = (
-        "Du bist ein Researcher für M&A-Transaktionen. "
-        "Du suchst aktiv im Internet nach Firmen und lieferst NUR Firmen, "
-        "deren Website du tatsächlich aufgerufen und verifiziert hast. "
-        "Erfinde NIEMALS Firmennamen oder Websites. "
-        "Wenn du weniger als 10 verifizierbare Firmen findest, gib nur die an, die du wirklich kennst."
+    Returns:
+        List of dicts with at minimum {"company_name": str, "website": str}.
+    """
+    # Rotate archetype based on batch number, resolve {industry} placeholder
+    archetype = render_template(
+        SEARCH_ARCHETYPES[batch_num % len(SEARCH_ARCHETYPES)],
+        industry=industry,
     )
-    discovery_extra = f"\n{PROMPT_DISCOVERY_EXTRA}" if PROMPT_DISCOVERY_EXTRA else ""
-    user_prompt = f"""
-{archetype}
 
-Ich suche {DISCOVERY_COUNT} echte, kleine bis mittelständische Unternehmen (20-200 Mitarbeiter).
-Keine Konzerne, keine DAX-Unternehmen, keine Tochtergesellschaften großer Konzerne.
-
-PFLICHTREGELN:
-- Nenne NUR Firmen, deren Website du tatsächlich aufgerufen und deren Existenz du bestätigt hast.
-- Jeder Eintrag MUSS eine echte, erreichbare Website enthalten.
-- Wenn du dir bei einer Firma nicht sicher bist: lass sie weg.{discovery_extra}
-
-NICHT nennen (bereits bekannt): {forbidden_str}
-
-Antworte NUR als JSON-Array:
-[{{"name": "Firmenname GmbH", "city": "Stadt", "website": "www.example.de"}}]
-"""
+    _disc = _config["prompts"]["discovery"]
+    system_prompt = _disc["system"]
+    user_prompt = render_template(
+        _disc["user_template"],
+        archetype=archetype,
+        discovery_count=str(DISCOVERY_COUNT),
+        discovery_extra=f"\n{PROMPT_DISCOVERY_EXTRA}" if PROMPT_DISCOVERY_EXTRA else "",
+    )
     raw = perplexity_call(system_prompt, user_prompt)
     if not raw:
         return []
@@ -488,83 +524,34 @@ Antworte NUR als JSON-Array:
 # 6. VERIFICATION — M&A Expert with Impressum + LinkedIn priority
 # ============================================================
 def verify_company(company_name: str, industry: str) -> dict | None:
-    """M&A expert verification. Standardized financial output format.
-    Checks for Tochtergesellschaft status and parent revenue."""
+    """Verify a candidate company via Perplexity and return structured M&A data.
+
+    Checks ownership structure, revenue, employee count, CEO/contact, and
+    Impressum details. Flags Tochtergesellschaft status and parent revenue.
+
+    Args:
+        company_name: Full legal name of the company.
+        industry: Target industry/niche for context in the prompt.
+
+    Returns:
+        Dict of verified fields, or None if the API call fails.
+    """
     roles_str = ", ".join(CRITERIA.required_roles) if CRITERIA.required_roles else "Geschäftsführer, CEO, Inhaber"
     rev_label = CRITERIA.revenue_label()
     emp_label = CRITERIA.employee_label()
 
-    system_prompt = (
-        "Du bist ein M&A-Analyst für den deutschen Mittelstand. "
-        "Du bewertest Unternehmen als Akquisitionsziele. "
-        "Du gibst niemals auf: Wenn die Website nicht direkt findbar ist, "
-        "suchst du nach '[Firmenname] Impressum', '[Firmenname] LinkedIn', "
-        "oder '[Firmenname] Handelsregister'. "
-        "Du lieferst Finanzdaten IMMER als reine Zahlen — NIEMALS als Text."
+    _ver = _config["prompts"]["verify"]
+    system_prompt = _ver["system"]
+    user_prompt = render_template(
+        _ver["user_template"],
+        company_name=company_name,
+        industry=industry,
+        rev_label=rev_label,
+        emp_label=emp_label,
+        roles_str=roles_str,
+        buyer_profile_extra=f"\n{PROMPT_BUYER_PROFILE_EXTRA}" if PROMPT_BUYER_PROFILE_EXTRA else "",
+        verify_extra=f"\n{PROMPT_VERIFY_EXTRA}" if PROMPT_VERIFY_EXTRA else "",
     )
-    user_prompt = f"""
-Analysiere "{company_name}" (Branche: {industry}, DACH-Region) als M&A-Target.
-
-KÄUFERPROFIL:
-- Umsatz: {rev_label}
-- Mitarbeiter: {emp_label}
-- Eigenständiges Unternehmen (GmbH, KG, AG) — kann Inhabergeführt, Familienunternehmen oder professionell gemanagt sein
-- KEINE Tochtergesellschaften großer Konzerne, KEINE börsennotierte Unternehmen{f"{chr(10)}{PROMPT_BUYER_PROFILE_EXTRA}" if PROMPT_BUYER_PROFILE_EXTRA else ""}
-
-DEINE AUFGABEN (in dieser Reihenfolge):
-
-1. IMPRESSUM FINDEN (HÖCHSTE PRIORITÄT):
-   - Suche nach "{company_name}" Website
-   - Wenn nicht direkt gefunden: suche "{company_name} Impressum" und "{company_name} Kontakt"
-   - Extrahiere: {roles_str} Name (wörtlich), E-Mail, Telefon, Adresse
-   - Notiere die exakte Impressum-URL
-
-2. LINKEDIN PRÜFEN:
-   - Suche "{company_name} LinkedIn" für Mitarbeiterzahl und Geschäftsführung
-   - LinkedIn-Mitarbeiterzahl ist oft die zuverlässigste Quelle
-
-3. FINANZDATEN (STANDARDISIERT):
-   - Suche auf Bundesanzeiger und North Data nach Jahresabschlüssen 2022-2024.
-   - WICHTIG — Liefere Finanzdaten in diesem EXAKTEN Format:
-     "revenue_eur": [Zahl in EUR, z.B. 8500000 für 8.5 Mio] oder "NOT FOUND"
-     "employees_count": [Ganzzahl, z.B. 85] oder "NOT FOUND"
-   - Wenn exakte Zahlen fehlen: SCHÄTZE über Faustformel:
-     Mitarbeiterzahl × €90.000 bis €150.000 = geschätzter Jahresumsatz.
-     Markiere dann revenue_source als "estimated".
-   - ACHTUNG: Verwechsle NICHT Millionen und Milliarden.
-     8.5 Mio EUR = 8500000. NICHT 8500000000.
-
-4. TOCHTERGESELLSCHAFT-CHECK (KRITISCH):
-   - Prüfe auf North Data / Handelsregister: Ist diese Firma eine eigenständige GmbH
-     oder eine Tochter eines größeren Konzerns?
-   - Wenn Tochtergesellschaft: Nenne den MUTTERKONZERN und dessen Umsatz.
-     Beispiel: "parent_company": "XY Holding AG", "parent_revenue_eur": 900000000
-   - Eine Firma mit 50 Mitarbeitern aber Mutterkonzern-Umsatz >100 Mio ist KEIN echtes KMU.
-
-5. INHABERSCHAFT:
-   - Ergebnis aus Check 4: NUR EINES von:
-     "inhabergeführt", "familienunternehmen", "management-geführt", "subsidiary", "group", "public", "unknown"
-
-6. FIT-BEWERTUNG:
-   - Passt die Firma zum Käuferprofil? Ein Satz.
-
-Antworte als JSON mit diesen Keys:
-"company_name", "website", "city", "country",
-"revenue_eur" (ZAHL in EUR, nicht Text!), "revenue_source" (eines von: "bundesanzeiger", "northdata", "creditreform", "estimated", "NOT FOUND"),
-"employees_count" (GANZZAHL!), "employees_source" (eines von: "linkedin", "website", "northdata", "estimated", "NOT FOUND"),
-"ownership_type", "parent_company" (Name oder "none"), "parent_revenue_eur" (Zahl oder 0),
-"ceo_name", "email", "phone",
-"impressum_url", "impressum_quote",
-"linkedin", "description", "why_interesting", "risks",
-"fit_verdict", "confidence"
-
-Regeln:
-- "confidence": "verified", "estimated", oder "low"
-- "fit_verdict": "GOOD FIT", "NEEDS RESEARCH", oder "NO FIT" mit kurzem Grund
-- ERFINDE NIEMALS Namen, URLs oder Daten{f"{chr(10)}{PROMPT_VERIFY_EXTRA}" if PROMPT_VERIFY_EXTRA else ""}
-
-Antworte NUR mit dem JSON-Objekt.
-"""
     raw = perplexity_call(system_prompt, user_prompt)
     if not raw:
         return None
@@ -587,11 +574,17 @@ Antworte NUR mit dem JSON-Objekt.
 # 7. HARD GATES — Programmatic checks with Rev/FTE triangulation
 # ============================================================
 def parse_revenue(revenue_str) -> float | None:
-    """Parse revenue from various formats into a clean EUR float.
+    """Parse revenue from various German/English formats into a EUR float.
 
     Handles: 8500000, "8.5 Mio EUR", "~8.5M", "8,5 Million EUR",
-    "ca. 8.500.000 EUR", "8.5 Mio. €", etc.
+    "ca. 8.500.000 EUR", "8.5 Mio. €", German thousands dots, etc.
     Guards against Mrd/Billion confusion.
+
+    Args:
+        revenue_str: Raw revenue string or numeric value from Perplexity output.
+
+    Returns:
+        Revenue as a float in EUR, or None if unparseable/missing.
     """
     if not revenue_str or str(revenue_str) in ("NOT FOUND", "UNVERIFIED", "N/A", "not found"):
         return None
@@ -677,9 +670,19 @@ def _is_missing(value) -> bool:
 
 
 def preflight_check(data: dict, company_name: str, industry: str) -> tuple[dict, bool]:
-    """Pre-Flight: If Rev/FTE ratio is absurd (>500k or <30k), ask Perplexity
-    for a targeted fact-check before sending to hard gates.
-    Returns (data, did_call_api)."""
+    """Fact-check implausible Rev/FTE ratios via a targeted Perplexity call.
+
+    Only fires when the ratio is outside the 30k–500k EUR/FTE range.
+    Overwrites revenue and employee fields in data if better values are found.
+
+    Args:
+        data: Verified company dict (mutated in-place if a call is made).
+        company_name: Full legal name used in the follow-up prompt.
+        industry: Target industry for context.
+
+    Returns:
+        Tuple of (updated data dict, did_call_api bool).
+    """
     revenue = parse_revenue(data.get("revenue", data.get("revenue_eur")))
     employees = parse_employees(data.get("employees", data.get("employees_count")))
 
@@ -693,19 +696,16 @@ def preflight_check(data: dict, company_name: str, industry: str) -> tuple[dict,
     write_log(f"PRE-FLIGHT: {company_name} Rev/FTE={ratio:,.0f}€ is suspicious — requesting fact-check")
     print(f"    [PRE-FLIGHT] Rev/FTE={ratio:,.0f}€ suspicious — fact-checking...")
 
+    _pre = _config["prompts"]["preflight"]
     raw = perplexity_call(
-        "Du bist ein Finanz-Faktenprüfer. Antworte NUR mit JSON.",
-        f"""Faktencheck für "{company_name}" ({industry}, DACH):
-Behauptet: Umsatz={data.get('revenue', data.get('revenue_eur'))} EUR, Mitarbeiter={data.get('employees', data.get('employees_count'))}
-
-Prüfe auf Bundesanzeiger und North Data (2022-2024):
-1. Ist der Umsatz realistisch für diese Firmengröße?
-2. Stimmt die Mitarbeiterzahl?
-3. Ist die Firma vielleicht eine Tochtergesellschaft eines Konzerns?
-
-Antworte NUR als JSON:
-{{"revenue_eur": [korrigierte Zahl oder 0], "employees_count": [korrigierte Zahl oder 0], "correction_note": "Erklärung"}}
-"""
+        _pre["system"],
+        render_template(
+            _pre["user_template"],
+            company_name=company_name,
+            industry=industry,
+            revenue_eur=str(data.get("revenue", data.get("revenue_eur"))),
+            employees_count=str(data.get("employees", data.get("employees_count"))),
+        ),
     )
     if raw:
         correction = extract_json_object(raw)
@@ -727,7 +727,19 @@ Antworte NUR als JSON:
 
 
 def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bool, str, str]:
-    """Returns (passed, reason, destination). Destination: Abgelehnt / Needs Research / Ready to Call."""
+    """Run deterministic hard gates against TargetCriteria thresholds.
+
+    Checks ownership, revenue range, employee range, and missing-data flags.
+    Any gate with a threshold of 0 is skipped (disabled via .env).
+
+    Args:
+        data: Verified company dict with parsed revenue/employee/ownership fields.
+        criteria: TargetCriteria instance (defaults to global CRITERIA from .env).
+
+    Returns:
+        Tuple of (passed: bool, reason: str, destination: str).
+        destination is one of: "Abgelehnt", "Needs Research", "Ready to Call".
+    """
     revenue = parse_revenue(data.get("revenue", data.get("revenue_eur")))
     employees = parse_employees(data.get("employees", data.get("employees_count")))
     ownership = str(data.get("ownership_type", "")).lower().strip()
@@ -787,6 +799,15 @@ def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bo
 # 8. DIRECT SHEET MAPPING — No GPT, fixed keys
 # ============================================================
 def map_to_sheet(data: dict, industry: str) -> dict:
+    """Map a verified company dict to the canonical Google Sheets column layout.
+
+    Args:
+        data: Verified + gate-checked company dict from verify_company().
+        industry: Target industry string written to the "Sector" column.
+
+    Returns:
+        Dict keyed by sheet column header names (ready for buffer_row).
+    """
     sources = []
     for key in ("revenue_source", "employees_source", "impressum_url", "linkedin"):
         val = data.get(key, "")
@@ -805,7 +826,7 @@ def map_to_sheet(data: dict, industry: str) -> dict:
         "Employee Count (Est.)": data.get("employees", ""),
         "CEO/Founder Name": data.get("ceo_name", ""),
         "CEO Email": data.get("email", ""),
-        "CEO Phone": data.get("phone", ""),
+        "CEO Phone": f"'{data.get('phone', '')}" if str(data.get("phone", "")).startswith("+") else data.get("phone", ""),
         "Quellen / Links": " | ".join(sources) if sources else "",
     }
 
@@ -853,6 +874,7 @@ def run_ma_agent_loop():
 
     targets_done = 0
     consecutive_failures = 0
+    smart_retry = 0
     batch_num = 0
 
     while targets_done < count_needed:
@@ -995,16 +1017,25 @@ def run_ma_agent_loop():
                 targets_done += 1
                 write_log(f"READY TO CALL: {v_name} | confidence: {confidence}")
 
-        # --- BUG FIX: Reset/increment consecutive_failures based on REAL progress ---
-        # A batch full of hallucinations that all got skipped is NOT progress.
-        # Only reset the counter if at least one company was real and processed.
+        # --- Smart-Retry: only count as failure after SMART_RETRY_MAX empty batches ---
+        # A batch full of dupes/hallucinations triggers an archetype jump first.
+        # Only after SMART_RETRY_MAX jumps without progress do we increment consecutive_failures.
         if batch_useful > 0:
             consecutive_failures = 0
+            smart_retry = 0
         else:
-            consecutive_failures += 1
-            write_log(f"BATCH {batch_num}: zero useful results (all hallucinated/duped) — "
-                      f"consecutive_failures={consecutive_failures}")
-            print(f"  Batch produced no useful results — failure count: {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
+            smart_retry += 1
+            write_log(f"BATCH {batch_num}: zero useful results — smart_retry={smart_retry}/{SMART_RETRY_MAX}")
+            print(f"  Batch produced no useful results — smart_retry: {smart_retry}/{SMART_RETRY_MAX}")
+            if smart_retry >= SMART_RETRY_MAX:
+                consecutive_failures += 1
+                smart_retry = 0
+                write_log(f"Smart-Retry exhausted — consecutive_failures={consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
+                print(f"  Smart-Retry exhausted — failure count: {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}")
+            else:
+                # Force archetype diversity: skip ahead by half the archetype list
+                batch_num += len(SEARCH_ARCHETYPES) // 2
+                write_log(f"Smart-Retry: jumping to archetype index {batch_num % len(SEARCH_ARCHETYPES)}")
 
     # --- COMMIT ---
     print(f"\n{'='*55}")

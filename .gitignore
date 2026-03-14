@@ -25,6 +25,7 @@ token.json
 
 # --- Runtime / Session Data ---
 Session_Log.md
+Session_Log*.md
 
 # --- macOS ---
 .DS_Store

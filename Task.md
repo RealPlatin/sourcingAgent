@@ -1,37 +1,24 @@
 # M&A Agent - Task Tracking
 
-## V3.1 Final (2026-03-14)
+## Aktueller Status: V4.3 In Arbeit (2026-03-14)
 
-### Implemented
-- [x] `TargetCriteria` dataclass loaded from `.env` — zero hardcoded values
-- [x] Dynamic gates: set any value to 0 to disable that gate
-- [x] Domain-based deduplication (`extract_domain` + `forbidden_domains`)
-- [x] Post-verification domain check (catches holding structures)
-- [x] Batch discovery requests website URL for early domain dedup
-- [x] Dynamic prompts use `CRITERIA.revenue_label()` / `CRITERIA.employee_label()`
-- [x] `REQUIRED_ROLES` config for Impressum role matching
-- [x] Buffer-based batch writing with SIGINT handler
-- [x] Impressum verbatim quoting + citation URLs
-- [x] Smart fallbacks: missing CEO/website/contact → Needs Research
-- [x] Batch GPT formatting for unknown columns
-- [x] Session summary with cost tracking
+### V4.3 — Offene Punkte
+- [ ] README.md erstellen (Prompt-Dokumentation für Nutzer)
+- [ ] Alle Prompt-Texte aus ma_agents.py → config.json externalisieren
+- [ ] Forbidden-List aus Discovery-API-Prompt entfernen (Token-Ersparnis)
+- [ ] SEARCH_ARCHETYPES verbessern: 10 diversere Blickwinkel (Regionen, Verbände, Nachfolge, Nischen)
+- [ ] Smart-Retry Logik: bei Duplikat-Batch erst 2x Archetype-Jump, dann consecutive_failures++
 
-### Noch offen
-- [ ] Praxistest mit echtem Durchlauf
+### V4.2 — Erledigte Bugs
+- [x] **BUG 1 — CRITICAL:** Infinite loop — `consecutive_failures` reset fix via `batch_useful > 0` (Zeile 1087)
+- [x] **BUG 2 — HIGH:** Revenue-Parser: `"900.000"` → 900k fix via `re.search(r'\d+\.\d{3}(?!\d)')` (Zeile 720)
+- [x] **BUG 3 — MEDIUM:** Preflight-Kosten fix via Boolean-Return + conditional add (Zeile 1047–1049)
+- [x] **BUG 4 — MINOR:** Halluzinations-Check fix via `.strip().lower()` (Zeile 1013)
 
-## V3.2 Fixes (2026-03-14)
+### Nächste Schritte (nach V4.3)
+- [ ] Praxistest V4.3 mit echtem Durchlauf
 
-### Implemented
-- [x] Micro-batching: 4 rounds x 5-7 companies statt 1x20
-- [x] Search archetypes: 8 verschiedene deutsche Suchbegriffe, rotierend pro Runde
-- [x] DAX/Großkonzern-Ausschluss explizit im System-Prompt
-- [x] Website-URL bereits in Discovery angefragt (für frühes Domain-Dedup)
-- [x] OpenAI JSON fix: System-Prompt + User-Prompt enthalten "Output must be in JSON format"
-- [x] Token-set fuzzy matching: Wortgruppen-Überlappung fängt Namenspermutationen
-- [x] Enhanced rejection logging: Ownership, Revenue, Employees im Ablehnungsgrund
-
-### Noch offen
-- [ ] Praxistest V3.2
+---
 
 ## .env Config Referenz
 ```
@@ -45,7 +32,12 @@ FORBIDDEN_OWNERSHIP=subsidiary,group,listed,public,konzern,tochter
 REQUIRED_ROLES=Geschäftsführer,Managing Director,CEO,Inhaber
 ```
 
+---
+
 ## Versionshistorie
-- V2.3: Fuzzy dedup, error logging, sharper prompts
-- V3.0: Batch discovery, hard gates, SheetState, 3-tier output
-- V3.1: TargetCriteria dataclass, domain dedup, Impressum verification, batch writing, dynamic gates
+- **V2.3:** Fuzzy dedup, error logging, sharper prompts
+- **V3.0:** Batch discovery, hard gates, SheetState, 3-tier output (Ready / Needs Research / Abgelehnt)
+- **V3.1:** `TargetCriteria` dataclass aus `.env`, domain dedup, Impressum verification, buffer-based batch writing, dynamic gates
+- **V3.2:** Micro-batching (4x rounds), 8 Sucharchetypen rotierend, DAX-Ausschluss im Prompt, token-set fuzzy matching, enhanced rejection logging
+- **V4.x:** Interne Refactoring-Versionen, Google-style Docstrings, Hygiene
+- **V4.2:** Alle 4 kritischen Bugs gefixt (infinite loop, revenue parser, preflight cost, hallucination check)

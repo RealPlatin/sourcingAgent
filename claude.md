@@ -1,14 +1,15 @@
-# M&A Agent - Core Rules
+# M&A Agent Rules
 
 ## Behavior
-- **Plan First**: Always use Planning Mode before coding. Write to @Task.md.
-- **Minimal Context**: Do not re-read files unless changed. Use `grep` for searches.
-- **Atomic Changes**: Change only necessary lines, no full-file rewrites.
+- **Plan**: Always update @Task.md before coding.
+- **Context**: Use `grep` for search. Only re-read changed files.
+- **Atomic**: Minimal line changes only. No full-file rewrites.
 
-## Tech Stack
-- Python 3.10+, Google Sheets API v4, Perplexity Sonar.
-- Coding Style: Modular, Class-based, Google-style Docstrings.
+## Tech
+- Python 3.11, Google Sheets v4, Perplexity Sonar.
+- Style: Modular, Class-based, Google Docstrings.
+- .venv: Always use the local virtual environment.
 
-## Critical Constraints
-- No new external APIs/Subscriptions (Internal logic only).
-- Batch-Write to Sheets is mandatory for new features.
+## Constraints
+- **Internal Only**: No new APIs or subscriptions.
+- **Efficiency**: Mandatory Batch-Write for Sheets.
