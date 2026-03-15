@@ -47,6 +47,31 @@ Merge back into `verified` dict before `hard_gate_check`.
 2. Phase B → parse financials → merge into `verified`
 3. `preflight_check` → `hard_gate_check` (unchanged)
 
+**Phase B failure fallback:** If Phase B also returns no financial data (e.g. company has no registry filing at all), the fields remain `"NOT FOUND"` and `hard_gate_check` routes the company to **Needs Research** via the existing soft gate: `"No financial data — needs manual check"`. No data is lost — the company is still written to the sheet with all contact data intact.
+
+---
+
+### Translation Bridge Consideration
+
+The existing `translate_industry(industry, region, custom_region_name)` call translates the user's English niche term into German (DACH) or Dutch (Benelux) before Phase A discovery queries. For Phase B, registry query strings are already templated in the local language (see table above). No additional translation call is needed in Phase B — the company name itself is the primary search key, and all registry APIs accept local-language terms natively.
+
+However, if Phase B expands to **full industry-level registry scans** (searching a registry for all companies in a given sector, rather than looking up a specific company), `translate_industry` must be called before constructing the Phase B query string to ensure correct language.
+
+---
+
+### Escalation Pattern Analogy
+
+V5.9's Contact-Strike pattern provides a proven template for V6.0's Phase B escalation:
+
+| V5.9 Contact-Strike | V6.0 Phase B (proposed) |
+|---|---|
+| Trigger: email AND phone missing after Phase A verify | Trigger: revenue AND employees NOT FOUND after Phase A verify |
+| Pass 1: Deep-Link-Scan (targeted subpage scrape) | Pass 1: GPT-4o registry query (structured financial extraction) |
+| Pass 2: External Safety-Net (Maps / Yelp / NorthData) | Pass 2: (optional) Broader web search for annual report PDF |
+| Final fallback: route to Needs Research | Final fallback: route to Needs Research with all contact data intact |
+
+The same `api_costs += COST_PERPLEXITY` accounting pattern applies — Phase B calls should increment `api_costs` by the actual GPT-4o token cost.
+
 ---
 
 ### Prerequisites for V6.0
@@ -71,3 +96,4 @@ Merge back into `verified` dict before `hard_gate_check`.
 - V6.0 is **planned, not implemented**
 - All code changes require a future session decision on GPT-4o vs. Gemini for Phase B
 - No changes to `config.json`, `hard_gate_check()`, or `discover_companies()` are implied
+- Logical gaps closed in this document: Phase B failure fallback, translation bridge scope, escalation pattern

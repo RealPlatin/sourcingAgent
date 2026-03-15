@@ -123,7 +123,12 @@ def render_template(template: str, **kwargs) -> str:
     return result
 
 
-def write_log(message):
+def write_log(message: str) -> None:
+    """Append a timestamped entry to the session log file.
+
+    Args:
+        message: Log message string to append.
+    """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(f"[{timestamp}] {message}\n")
@@ -133,6 +138,14 @@ def write_log(message):
 # 2. GOOGLE SHEETS — Auth + State + Buffer
 # ============================================================
 def authenticate_google_sheets():
+    """Authenticate with Google Sheets API using OAuth2, refreshing credentials as needed.
+
+    On first run, opens a local browser window for OAuth consent. Persists the
+    refresh token to 'token.json' for subsequent runs.
+
+    Returns:
+        Authenticated Google Sheets API service resource.
+    """
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
@@ -480,14 +493,23 @@ SEARCH_ARCHETYPES: list = []   # dynamically set from _active_prompts in run_ma_
 def discover_companies(industry: str, localized_industry: str, state: SheetState, batch_num: int, region: str = "") -> list[dict]:
     """Search-oriented discovery — asks Perplexity to SEARCH, not to list from memory.
 
+    Rotates through 10 search archetypes to diversify results across batches.
+    The GEO-FENCE instruction in the system prompt ensures only on-region companies
+    are returned.
+
     Args:
         industry: English industry/niche string (used for logging/verify context).
-        localized_industry: Region-language-translated niche string for search queries.
-        state: Active SheetState used for forbidden-name deduplication.
-        batch_num: Current batch index; used to rotate SEARCH_ARCHETYPES.
+        localized_industry: Region-language-translated niche string injected into
+            search archetype queries (German for DACH, Dutch for Benelux, English
+            for UK/Custom).
+        state: Active SheetState; used only for logging — dedup happens in the caller.
+        batch_num: Internal archetype rotation index; may jump forward on Smart-Retry.
+        region: Human-readable region name (e.g. "France") injected as {{region}}
+            in Custom profile templates. Unused for DACH/UK/Benelux.
 
     Returns:
-        List of dicts with at minimum {"company_name": str, "website": str}.
+        List of candidate dicts, each with at minimum {"name": str}. May also
+        include {"website": str, "city": str} if Perplexity returns them.
     """
     # Rotate archetype based on batch number, resolve {industry} placeholder with localized term
     _archetypes = _active_prompts["discovery"]["search_archetypes"]
@@ -540,15 +562,26 @@ def discover_companies(industry: str, localized_industry: str, state: SheetState
 def verify_company(company_name: str, industry: str, region: str = "", website: str = "") -> dict | None:
     """Verify a candidate company via Perplexity and return structured M&A data.
 
-    Checks ownership structure, revenue, employee count, CEO/contact, and
-    Impressum details. Flags Tochtergesellschaft status and parent revenue.
+    Executes a deep-dive prompt instructing Perplexity to: scrape Impressum/contact
+    subpages, check LinkedIn for headcount, look up financials in the regional
+    registry (Bundesanzeiger / Companies House / KVK), and assess ownership
+    independence. Returns a normalized dict ready for hard_gate_check().
 
     Args:
         company_name: Full legal name of the company.
-        industry: Target industry/niche for context in the prompt.
+        industry: English industry/niche string for buyer-profile context.
+        region: Human-readable region name (e.g. "France") for {{region}} template
+            substitution. Pass `custom_region_name` from the main loop.
+        website: Company website URL passed as context to the verify prompt; helps
+            Perplexity target the correct Impressum page.
 
     Returns:
-        Dict of verified fields, or None if the API call fails.
+        Dict with keys: company_name, website, city, country, revenue_eur,
+        revenue_source, employees_count, employees_source, ownership_type,
+        parent_company, parent_revenue_eur, ceo_name, email, phone,
+        impressum_url, impressum_quote, linkedin, description, why_interesting,
+        risks, fit_verdict, confidence. Also aliased as revenue/employees for
+        backward compatibility. Returns None if the API call fails entirely.
     """
     roles_str = ", ".join(CRITERIA.required_roles) if CRITERIA.required_roles else "Geschäftsführer, CEO, Inhaber"
     rev_label = CRITERIA.revenue_label()
@@ -1064,7 +1097,18 @@ def broaden_industry_gpt(industry: str, region: str) -> str:
 # ============================================================
 # 9. MAIN PIPELINE — Simple, linear, no leads lost
 # ============================================================
-def run_ma_agent_loop():
+def run_ma_agent_loop() -> None:
+    """Entry point: interactive M&A sourcing session from CLI prompt to Sheets commit.
+
+    Orchestrates the full pipeline loop:
+    1. Region + niche selection (with optional GPT-4o-mini sub-niche expansion)
+    2. Translation bridge (English → German/Dutch via GPT-4o-mini)
+    3. Batch discovery loop with Smart-Retry and Early Niche Pivot
+    4. Per-company: Verify → Contact-Strike → Pre-Flight → Hard Gates → CEO Fallback
+    5. Batch-write all results to Google Sheets (Targets / Needs Research / Abgelehnt)
+
+    Handles Ctrl+C gracefully by committing the session buffer before exit.
+    """
     print("\n" + "=" * 55)
     print("  M&A COMMAND CENTER V5.9 — INVESTMENT GRADE")
     print("=" * 55)
