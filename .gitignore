@@ -22,6 +22,7 @@ token.json
 # --- Environment Variables (API Keys) ---
 .env
 .env.*
+!.env.example
 
 # --- Runtime / Session Data ---
 Session_Log.md
@@ -36,3 +37,7 @@ Session_Log*.md
 .idea/
 .vscode/
 *.code-workspace
+
+# --- Data / Runtime outputs ---
+data/
+!data/.gitkeep

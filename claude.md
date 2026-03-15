@@ -1,7 +1,7 @@
 # M&A Agent Rules
 
 ## Behavior
-- **Plan**: Always update @Task.md before coding.
+- **Plan**: Always update @docs/Task.md before coding.
 - **Context**: Use `grep` for search. Only re-read changed files.
 - **Atomic**: Minimal line changes only. No full-file rewrites.
 
