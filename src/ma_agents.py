@@ -30,6 +30,9 @@ _CREDS = str(_ROOT / 'credentials.json')
 # --- ENV + API CLIENTS ---
 load_dotenv(_ROOT / '.env')
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
+if not PERPLEXITY_API_KEY:
+    print("ERROR: PERPLEXITY_API_KEY is not set. Please add it to your .env file.")
+    sys.exit(1)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 CONFIG_FILE = str(_ROOT / 'config' / 'config.json')
@@ -105,8 +108,12 @@ CRITERIA = TargetCriteria.from_env()
 # --- Load config.json for prompt customization ---
 _config: dict = {}
 if os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, 'r') as _f:
-        _config = json.load(_f)
+    try:
+        with open(CONFIG_FILE, 'r') as _f:
+            _config = json.load(_f)
+    except json.JSONDecodeError as _e:
+        print(f"ERROR: config.json is malformed and could not be parsed: {_e}")
+        sys.exit(1)
 _active_prompts: dict = {}   # populated at runtime after region selection
 
 # --- Dynamic sheet tab names (configurable via config.json "sheet_tabs") ---
@@ -141,6 +148,7 @@ def write_log(message: str) -> None:
     Args:
         message: Log message string to append.
     """
+    Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(f"[{timestamp}] {message}\n")
@@ -158,18 +166,29 @@ def authenticate_google_sheets():
     Returns:
         Authenticated Google Sheets API service resource.
     """
-    creds = None
-    if os.path.exists(_TOKEN):
-        creds = Credentials.from_authorized_user_file(_TOKEN, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(_CREDS, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(_TOKEN, 'w') as token:
-            token.write(creds.to_json())
-    return build('sheets', 'v4', credentials=creds)
+    try:
+        creds = None
+        if os.path.exists(_TOKEN):
+            creds = Credentials.from_authorized_user_file(_TOKEN, SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception:
+                    # Expired token cannot be refreshed — force re-auth
+                    creds = None
+            if not creds:
+                if not os.path.exists(_CREDS):
+                    print("ERROR: credentials.json not found. Download it from Google Cloud Console and place it in the project root.")
+                    sys.exit(1)
+                flow = InstalledAppFlow.from_client_secrets_file(_CREDS, SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open(_TOKEN, 'w') as token:
+                token.write(creds.to_json())
+        return build('sheets', 'v4', credentials=creds)
+    except Exception as e:
+        print(f"ERROR: Google Sheets authentication failed: {e}")
+        sys.exit(1)
 
 
 def extract_domain(url_or_name: str) -> str | None:
@@ -248,8 +267,8 @@ class SheetState:
                         domain = extract_domain(row[website_col_idx])
                         if domain:
                             self.forbidden_domains.add(domain)
-            except Exception:
-                pass
+            except Exception as e:
+                write_log(f"WARNING: Could not load forbidden list from '{tab}': {e}")
 
         write_log(f"Forbidden loaded: {len(self.forbidden_names)} names, {len(self.forbidden_domains)} domains")
 
@@ -996,9 +1015,9 @@ def map_to_sheet(data: dict, industry: str) -> dict:
         "Why Interesting": data.get("why_interesting", ""),
         "Risks": data.get("risks", ""),
         "Estimated Revenue (EUR)": format_revenue_millions(data.get("revenue", data.get("revenue_eur"))),
-        "Employee Count (Est.)": data.get("employees", ""),
+        "Employee Count (Est.)": data.get("employees", data.get("employees_count", "")),
         "CEO/Founder Name": data.get("ceo_name", ""),
-        "CEO Email": data.get("email", ""),
+        "CEO Email": (lambda e: e if "@" in e else "")(data.get("email", "")),
         "CEO Phone": f"'{data.get('phone', '')}" if str(data.get("phone", "")).startswith("+") else data.get("phone", ""),
         "Quellen / Links": " | ".join(sources) if sources else "",
     }
@@ -1169,15 +1188,20 @@ def run_ma_agent_loop() -> None:
         if not region_input:
             print("  Input cannot be empty. Please try again.")
             continue
+        _available_prompts = _config.get("prompts", {})
         if region_input in _region_map:
             region = _region_map[region_input]
             custom_region_name = region
-        elif region_input in _config["prompts"]:
+        elif region_input in _available_prompts:
             region = region_input
             custom_region_name = region
         else:
             region = "Custom"
             custom_region_name = region_input
+        if region not in _available_prompts:
+            print(f"  ERROR: Region profile '{region}' not found in config.json.")
+            print(f"  Available profiles: {', '.join(_available_prompts.keys()) or 'none'}")
+            continue
         break
     global _active_prompts
     _active_prompts = _config["prompts"][region]

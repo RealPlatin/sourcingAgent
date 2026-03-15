@@ -1,4 +1,4 @@
-# M&A Command Center
+# M&A Command Center `v5.9.3`
 
 Automated M&A sourcing pipeline that identifies investment-grade SME acquisition targets across Europe. Combines **Perplexity Sonar** (live web research), **GPT-4o-mini** (translation, niche intelligence), and **Google Sheets v4** (structured output).
 
@@ -108,6 +108,8 @@ The pipeline writes results to a Google Spreadsheet using OAuth 2.0. One-time se
 
 On **first run**, a browser window will open for Google OAuth authorization. Approve access — this auto-generates `token.json` in the project root, which persists your session. You will not need to re-authenticate unless `token.json` is deleted.
 
+**Startup validation:** If `credentials.json` is missing, the script prints `ERROR: credentials.json not found` and exits cleanly. If the OAuth token is expired and cannot be refreshed, the script automatically falls back to a new browser-based auth flow.
+
 **Important:** Both `credentials.json` and `token.json` are excluded from git via `.gitignore`. Never commit them.
 
 ### Perplexity API
@@ -119,6 +121,8 @@ On **first run**, a browser window will open for Google OAuth authorization. App
 ```env
 PERPLEXITY_API_KEY=pplx-YOUR_KEY_HERE
 ```
+
+**Startup validation:** The pipeline checks for this key immediately on launch. If it is missing or empty, the script prints a clear error message and exits before making any API calls.
 
 ### OpenAI API
 
@@ -253,6 +257,8 @@ Customize the Google Sheets tab names without changing code:
 ```
 
 Change any value to rename the corresponding tab. The script reads these names at startup and creates the tabs automatically if they do not exist.
+
+**Startup validation:** If `config/config.json` contains a syntax error (malformed JSON), the script prints `ERROR: config.json is malformed` with the exact parse error and exits — no cryptic stack traces.
 
 #### Spreadsheet ID
 
@@ -408,6 +414,8 @@ On region selection, `_active_prompts = _config["prompts"][region]` sets the run
 
 Custom regions inject a `{{region}}` placeholder (e.g. "France") into generic English templates. DACH / UK / Benelux use hardcoded local terminology (Impressum, inhabergeführt, intitle:Kontakt, etc.) appropriate to their markets.
 
+**Input guard:** If the user types a region name that has no matching profile in `config/config.json` (e.g. a typo), the CLI prints the available profile names and re-prompts — no crash, no silent fallback to DACH.
+
 **GEO-FENCE:** Every discovery prompt includes a hard GEO-FENCE instruction that tells Perplexity to immediately discard any company not headquartered in the target region. This operates at the prompt level — not as a post-filter.
 
 ---
@@ -517,7 +525,7 @@ Fires when Rev/FTE falls outside the 30k–500k EUR range. An additional Perplex
 ```
 [CEO-FIX] Found via Impressum: Dr. Klaus Müller
 ```
-**DACH-only.** Fires when the initial verify returns no CEO name. A second targeted Perplexity call searches `site:<website> intitle:Impressum` for the verbatim `Geschäftsführer:` line.
+**DACH-only.** Fires when the initial verify returns no CEO name. A second targeted Perplexity call searches `site:<website> intitle:Impressum` for the verbatim `Geschäftsführer:` line (`lookup_dach_ceo`). If found, the hard gate is re-evaluated immediately.
 
 ### `[CEO-Fallback]`
 ```

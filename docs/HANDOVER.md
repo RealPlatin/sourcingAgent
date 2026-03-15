@@ -56,7 +56,7 @@ On **first run**, a browser window opens for Google OAuth. Approve access — th
 
 ### 2d. Verify the Spreadsheet ID
 
-Open `config.json` and confirm `SPREADSHEET_ID` matches the live M&A spreadsheet. If it does not, update it or enter the correct ID when prompted at startup.
+Open `config/config.json` and confirm `SPREADSHEET_ID` matches the live M&A spreadsheet. If it does not, update it or enter the correct ID when prompted at startup.
 
 ---
 
@@ -193,17 +193,33 @@ The pipeline falls back gracefully:
 
 Fix: check `OPENAI_API_KEY` in `.env` and verify the key is active in the OpenAI dashboard.
 
+### Missing or invalid API key at startup
+
+**Symptom:** `ERROR: PERPLEXITY_API_KEY is not set. Please add it to your .env file.` and the script exits immediately.
+
+Fix: open `.env` in the project root and add the key. The script validates this before doing anything else.
+
 ### Google Sheets auth error
 
-**Symptom:** `Error 403` or `invalid_grant` at startup.
+**Symptom:** `Error 403`, `invalid_grant`, or `ERROR: Google Sheets authentication failed: ...` at startup.
 
-Fix: delete `token.json` and re-run. A browser window will open for re-authentication.
+Fix: delete `token.json` from the project root and re-run. A browser window will open for re-authentication. If `credentials.json` is missing, you will see `ERROR: credentials.json not found` — request it from your supervisor and place it in the project root.
 
-### `config.json` not found or `SPREADSHEET_ID` missing
+### `config/config.json` malformed or `SPREADSHEET_ID` missing
 
-**Symptom:** Script prompts `Enter Spreadsheet ID:` at startup.
+**Symptom:** `ERROR: config.json is malformed` and the script exits, or script prompts `Enter Spreadsheet ID:` at startup.
 
-Fix: paste the spreadsheet ID from the URL of the Google Sheet (`https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit`).
+Fix: validate the file with `.venv/bin/python -c "import json; json.load(open('config/config.json'))"`. If that throws, fix the JSON syntax error. For a missing spreadsheet ID, paste it from the Google Sheets URL (`https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit`).
+
+### `WARNING: Could not load forbidden list` in the log
+
+**Symptom:** `Session_Log.md` shows `WARNING: Could not load forbidden list from 'Targets': ...` at session start.
+
+This means the pipeline could not read the existing sheet rows to build its duplicate-exclusion list. It will continue running but may write companies already present in the sheet. Causes: Sheets API quota exceeded, network error, or wrong `SPREADSHEET_ID`. Check the error detail in the log and fix the root cause before the next session.
+
+### `data/` directory missing on fresh clone
+
+The `data/` directory (where `Session_Log.md` lives) is created automatically on first run if it does not exist. No manual action needed.
 
 ### Session interrupted mid-run (Ctrl+C)
 
@@ -215,31 +231,33 @@ The interrupt handler commits all buffered data to Sheets before exiting. You wi
 
 | File | Purpose |
 |---|---|
-| `ma_agents.py` | Main pipeline script |
-| `config.json` | Region profiles, archetypes, prompt templates, Spreadsheet ID |
+| `src/ma_agents.py` | Main pipeline script |
+| `config/config.json` | Region profiles, archetypes, prompt templates, Spreadsheet ID, sheet tab names |
 | `.env` | API keys and gate thresholds (never commit) |
-| `credentials.json` | Google OAuth client secret (never commit) |
-| `token.json` | Google OAuth refresh token (auto-generated, never commit) |
-| `Session_Log.md` | Timestamped log of every API call, decision, and error |
+| `credentials.json` | Google OAuth client secret — project root (never commit) |
+| `token.json` | Google OAuth refresh token — project root, auto-generated (never commit) |
+| `data/Session_Log.md` | Timestamped log of every API call, decision, and error (auto-created) |
 | `README.md` | Full technical documentation |
-| `Strategy_Report.md` | V6.0 roadmap (Hybrid Verification — not yet implemented) |
+| `docs/HANDOVER.md` | This guide |
+| `docs/Strategy_Report.md` | V6.0 roadmap (Hybrid Verification — not yet implemented) |
+| `docs/Task.md` | Developer task tracking |
 | `requirements.txt` | Python dependencies |
 
 ---
 
 ## 9. Quick Verification Checklist
 
-Before your first real run, confirm:
+Before your first real run, confirm (run from the project root):
 
 ```bash
 # Python syntax check
-.venv/bin/python -c "import ast; ast.parse(open('ma_agents.py').read()); print('Syntax OK')"
+.venv/bin/python -c "import ast; ast.parse(open('src/ma_agents.py').read()); print('Syntax OK')"
 
 # Config JSON valid
-.venv/bin/python -c "import json; json.load(open('config.json')); print('Config OK')"
+.venv/bin/python -c "import json; json.load(open('config/config.json')); print('Config OK')"
 
 # .env loaded
 .venv/bin/python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Perplexity key present:', bool(os.getenv('PERPLEXITY_API_KEY')))"
 ```
 
-All three should print OK / `True` before running a live session.
+All three should print `OK` / `True` before running a live session.
