@@ -109,6 +109,12 @@ if os.path.exists(CONFIG_FILE):
         _config = json.load(_f)
 _active_prompts: dict = {}   # populated at runtime after region selection
 
+# --- Dynamic sheet tab names (configurable via config.json "sheet_tabs") ---
+_sheet_tabs = _config.get("sheet_tabs", {})
+TAB_TARGETS: str = _sheet_tabs.get("targets", "Targets")
+TAB_DENIED: str = _sheet_tabs.get("denied", "Denied")
+TAB_NEEDS_RESEARCH: str = _sheet_tabs.get("needs_research", "Needs Research")
+
 
 def render_template(template: str, **kwargs) -> str:
     """Replace {{variable}} placeholders in a template string.
@@ -190,7 +196,7 @@ def extract_domain(url_or_name: str) -> str | None:
 
 
 class SheetState:
-    TABS = ["Targets", "Abgelehnt", "Needs Research"]
+    TABS = [TAB_TARGETS, TAB_DENIED, TAB_NEEDS_RESEARCH]
 
     SHEET_HEADERS = [
         "Company Name", "Country", "Sector/Sub-sector", "Website",
@@ -209,13 +215,13 @@ class SheetState:
         self._load_forbidden()
         self.session_buffer = {tab: [] for tab in self.TABS}
         self._committed = False
-        self._ensure_tab("Needs Research")
-        self._ensure_tab("Abgelehnt")
+        self._ensure_tab(TAB_NEEDS_RESEARCH)
+        self._ensure_tab(TAB_DENIED)
         self._register_interrupt_handler()
 
     def _load_headers(self):
         result = self.service.spreadsheets().values().get(
-            spreadsheetId=self.sheet_id, range='Targets!1:1').execute()
+            spreadsheetId=self.sheet_id, range=f'{TAB_TARGETS}!1:1').execute()
         headers = result.get('values', [[]])[0]
         write_log(f"Headers loaded: {headers}")
         return headers
@@ -884,7 +890,7 @@ def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bo
 
     Returns:
         Tuple of (passed: bool, reason: str, destination: str).
-        destination is one of: "Abgelehnt", "Needs Research", "Ready to Call".
+        destination is one of: "Denied", "Needs Research", "Ready to Call".
     """
     revenue = parse_revenue(data.get("revenue", data.get("revenue_eur")))
     employees = parse_employees(data.get("employees", data.get("employees_count")))
@@ -895,48 +901,48 @@ def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bo
     parent_name = data.get("parent_company", "none")
     if isinstance(parent_rev, (int, float)) and parent_rev > 100_000_000:
         return False, (f"Ghost SME: parent '{parent_name}' has {parent_rev/1e6:.0f}M EUR revenue"
-                       ), "Abgelehnt"
+                       ), TAB_DENIED
     if parent_name and str(parent_name).lower() not in ("none", "not found", "", "n/a"):
         if ownership in ("subsidiary", "group", "public", "konzern", "tochter", "listed"):
-            return False, f"Subsidiary of {parent_name} (ownership: {ownership})", "Abgelehnt"
+            return False, f"Subsidiary of {parent_name} (ownership: {ownership})", TAB_DENIED
 
     # --- HARD REJECTIONS ---
     if revenue is not None:
         if criteria.rev_min and revenue < criteria.rev_min:
-            return False, f"Revenue {revenue:,.0f} EUR < min {criteria.rev_min:,.0f}", "Abgelehnt"
+            return False, f"Revenue {revenue:,.0f} EUR < min {criteria.rev_min:,.0f}", TAB_DENIED
         if criteria.rev_max and revenue > criteria.rev_max:
-            return False, f"Revenue {revenue:,.0f} EUR > max {criteria.rev_max:,.0f}", "Abgelehnt"
+            return False, f"Revenue {revenue:,.0f} EUR > max {criteria.rev_max:,.0f}", TAB_DENIED
 
     if employees is not None:
         if criteria.emp_min and employees < criteria.emp_min:
-            return False, f"Employees {employees} < min {criteria.emp_min}", "Abgelehnt"
+            return False, f"Employees {employees} < min {criteria.emp_min}", TAB_DENIED
         if criteria.emp_max and employees > criteria.emp_max:
-            return False, f"Employees {employees} > max {criteria.emp_max}", "Abgelehnt"
+            return False, f"Employees {employees} > max {criteria.emp_max}", TAB_DENIED
 
     # Rev/FTE triangulation
     if revenue and employees and employees > 0:
         ratio = revenue / employees
         if criteria.rev_per_emp_min and ratio < criteria.rev_per_emp_min:
-            return False, f"Rev/FTE {ratio:,.0f}€ below {criteria.rev_per_emp_min:,.0f}€ threshold", "Abgelehnt"
+            return False, f"Rev/FTE {ratio:,.0f}€ below {criteria.rev_per_emp_min:,.0f}€ threshold", TAB_DENIED
         if criteria.rev_per_emp_max and ratio > criteria.rev_per_emp_max:
-            return False, f"Rev/FTE {ratio:,.0f}€ above {criteria.rev_per_emp_max:,.0f}€ threshold", "Abgelehnt"
+            return False, f"Rev/FTE {ratio:,.0f}€ above {criteria.rev_per_emp_max:,.0f}€ threshold", TAB_DENIED
 
     # Ownership gate — exact keyword match
     if ownership in ("subsidiary", "group", "public", "konzern", "tochter"):
-        return False, f"Ownership: {ownership}", "Abgelehnt"
+        return False, f"Ownership: {ownership}", TAB_DENIED
 
     # Check AI's fit verdict
     fit = str(data.get("fit_verdict", "")).upper()
     if "NO FIT" in fit:
-        return False, f"AI verdict: {data.get('fit_verdict', 'NO FIT')}", "Abgelehnt"
+        return False, f"AI verdict: {data.get('fit_verdict', 'NO FIT')}", TAB_DENIED
 
     # --- SOFT GATES → Needs Research ---
     if _is_missing(data.get("ceo_name")):
-        return True, _REASON_CEO_NOT_FOUND, "Needs Research"
+        return True, _REASON_CEO_NOT_FOUND, TAB_NEEDS_RESEARCH
     if _is_missing(data.get("email")) and _is_missing(data.get("phone")):
-        return True, "No contact info", "Needs Research"
+        return True, "No contact info", TAB_NEEDS_RESEARCH
     if revenue is None and employees is None:
-        return True, "No financial data — needs manual check", "Needs Research"
+        return True, "No financial data — needs manual check", TAB_NEEDS_RESEARCH
 
     return True, "All checks passed", "Ready to Call"
 
@@ -944,6 +950,27 @@ def hard_gate_check(data: dict, criteria: TargetCriteria = CRITERIA) -> tuple[bo
 # ============================================================
 # 8. DIRECT SHEET MAPPING — No GPT, fixed keys
 # ============================================================
+def format_revenue_millions(value) -> str:
+    """Format a raw revenue integer/float as a human-readable millions string.
+
+    Args:
+        value: Revenue as int, float, or string (e.g. 4500000, 'NOT FOUND').
+
+    Returns:
+        Formatted string (e.g. '4.5M', '12.0M') or the original value as-is
+        if not numeric.
+    """
+    if value is None or str(value).strip() in ("", "NOT FOUND", "not found", "UNVERIFIED", "N/A"):
+        return "NOT FOUND"
+    try:
+        num = float(value)
+        if num <= 0:
+            return "NOT FOUND"
+        return f"{num / 1_000_000:.1f}M"
+    except (ValueError, TypeError):
+        return str(value)
+
+
 def map_to_sheet(data: dict, industry: str) -> dict:
     """Map a verified company dict to the canonical Google Sheets column layout.
 
@@ -968,7 +995,7 @@ def map_to_sheet(data: dict, industry: str) -> dict:
         "Short Description": data.get("description", ""),
         "Why Interesting": data.get("why_interesting", ""),
         "Risks": data.get("risks", ""),
-        "Estimated Revenue (EUR)": data.get("revenue", ""),
+        "Estimated Revenue (EUR)": format_revenue_millions(data.get("revenue", data.get("revenue_eur"))),
         "Employee Count (Est.)": data.get("employees", ""),
         "CEO/Founder Name": data.get("ceo_name", ""),
         "CEO Email": data.get("email", ""),
@@ -1111,7 +1138,7 @@ def run_ma_agent_loop() -> None:
     2. Translation bridge (English → German/Dutch via GPT-4o-mini)
     3. Batch discovery loop with Smart-Retry and Early Niche Pivot
     4. Per-company: Verify → Contact-Strike → Pre-Flight → Hard Gates → CEO Fallback
-    5. Batch-write all results to Google Sheets (Targets / Needs Research / Abgelehnt)
+    5. Batch-write all results to Google Sheets (Targets / Needs Research / Denied)
 
     Handles Ctrl+C gracefully by committing the session buffer before exit.
     """
@@ -1415,7 +1442,7 @@ def run_ma_agent_loop() -> None:
             sheet_data = map_to_sheet(verified, target_industry)
 
             # --- CEO FALLBACK: DACH self-correction → generic fallback ---
-            if destination == "Needs Research" and reason == _REASON_CEO_NOT_FOUND:
+            if destination == TAB_NEEDS_RESEARCH and reason == _REASON_CEO_NOT_FOUND:
                 if region == "DACH":
                     write_log(f"CEO LOOKUP: second-pass Impressum search for {v_name}")
                     ceo = lookup_dach_ceo(v_name, v_website)
@@ -1427,12 +1454,12 @@ def run_ma_agent_loop() -> None:
                         passed, reason, destination = hard_gate_check(verified)
                         write_log(f"CEO LOOKUP: found '{ceo}' for {v_name}")
                 if _is_missing(verified.get("ceo_name")) and not _is_missing(verified.get("phone")):
-                    verified["ceo_name"] = "An die Geschäftsführung"
+                    verified["ceo_name"] = "To Management"
                     sheet_data = map_to_sheet(verified, target_industry)
                     destination = "Ready to Call"
                     passed = True
-                    reason = "CEO fallback: An die Geschäftsführung"
-                    print(f"    [CEO-FALLBACK] Set to 'An die Geschäftsführung'")
+                    reason = "CEO fallback: To Management"
+                    print(f"    [CEO-FALLBACK] Set to 'To Management'")
                     write_log(f"CEO FALLBACK applied: {v_name}")
 
             if not passed:
@@ -1442,15 +1469,15 @@ def run_ma_agent_loop() -> None:
                 detail = f"{reason} | Own: {ownership} | Rev: {rev} | Emp: {emp}"
                 print(f"    -> REJECTED: {detail}")
                 sheet_data["Notes"] = detail
-                state.buffer_row("Abgelehnt", sheet_data, "Rejected")
+                state.buffer_row(TAB_DENIED, sheet_data, "Rejected")
                 stats["rejected"] += 1
                 write_log(f"REJECTED: {v_name} | {detail}")
                 batch_useful += 1  # Rejection still counts — company was real and processed
 
-            elif destination == "Needs Research":
+            elif destination == TAB_NEEDS_RESEARCH:
                 print(f"    -> NEEDS RESEARCH: {reason}")
                 sheet_data["Notes"] = reason
-                state.buffer_row("Needs Research", sheet_data, "Needs Research")
+                state.buffer_row(TAB_NEEDS_RESEARCH, sheet_data, "Needs Research")
                 stats["needs_research"] += 1
                 write_log(f"NEEDS RESEARCH: {v_name} | {reason}")
                 batch_useful += 1
@@ -1458,7 +1485,7 @@ def run_ma_agent_loop() -> None:
             else:
                 confidence = verified.get("confidence", "?")
                 print(f"    -> READY TO CALL ✓ (confidence: {confidence})")
-                state.buffer_row("Targets", sheet_data, "Ready to Call")
+                state.buffer_row(TAB_TARGETS, sheet_data, "Ready to Call")
                 stats["ready"] += 1
                 batch_useful += 1
                 targets_done += 1

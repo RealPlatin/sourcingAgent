@@ -118,7 +118,7 @@ Enter how many "Ready to Call" targets you need. Start with `10` for a first run
 | `[Contact-Strike] Deep-link scan...` | Phone/email missing — escalating |
 | `[PRE-FLIGHT] Rev/FTE suspicious` | Revenue/employee ratio looks wrong — fact-checking |
 | `[CEO-FIX] Found via Impressum: ...` | CEO found on second pass (DACH only) |
-| `[CEO-Fallback] Set to 'An die Geschäftsführung'` | Generic fallback CEO name applied |
+| `[CEO-Fallback] Set to 'To Management'` | Generic fallback CEO name applied |
 | `-> READY TO CALL ✓` | Company passes all gates → written to Targets tab |
 | `-> NEEDS RESEARCH: No financial data` | Company is real but data is incomplete |
 | `-> REJECTED: Revenue 320000 EUR < min` | Company failed a hard gate |
@@ -133,7 +133,7 @@ When the pipeline finishes (or you press Ctrl+C), it commits all buffered data t
 COMMITTING TO GOOGLE SHEETS...
   Targets: 10 rows written
   Needs Research: 3 rows written
-  Abgelehnt: 12 rows written
+  Denied: 12 rows written
 ```
 
 Open the spreadsheet and review:
