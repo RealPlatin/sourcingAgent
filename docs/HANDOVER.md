@@ -65,7 +65,7 @@ Open `config.json` and confirm `SPREADSHEET_ID` matches the live M&A spreadsheet
 ```bash
 cd "DeBruyn Capital"
 source .venv/bin/activate
-python ma_agents.py
+python src/ma_agents.py
 ```
 
 You must run `source .venv/bin/activate` every time you open a new terminal. The prompt will show `(.venv)` when active.

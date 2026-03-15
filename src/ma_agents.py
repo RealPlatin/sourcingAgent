@@ -20,14 +20,20 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from pathlib import Path
+
+# --- ROOT PATHS ---
+_ROOT = Path(__file__).parent.parent  # src/../ → project root
+_TOKEN = str(_ROOT / 'token.json')
+_CREDS = str(_ROOT / 'credentials.json')
 
 # --- ENV + API CLIENTS ---
-load_dotenv()
+load_dotenv(_ROOT / '.env')
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-CONFIG_FILE = 'config.json'
-LOG_FILE = 'Session_Log.md'
+CONFIG_FILE = str(_ROOT / 'config' / 'config.json')
+LOG_FILE = str(_ROOT / 'data' / 'Session_Log.md')
 DISCOVERY_COUNT = 10
 MAX_CONSECUTIVE_FAILURES = 5
 COST_PERPLEXITY = 0.005
@@ -147,15 +153,15 @@ def authenticate_google_sheets():
         Authenticated Google Sheets API service resource.
     """
     creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if os.path.exists(_TOKEN):
+        creds = Credentials.from_authorized_user_file(_TOKEN, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(_CREDS, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
+        with open(_TOKEN, 'w') as token:
             token.write(creds.to_json())
     return build('sheets', 'v4', credentials=creds)
 
