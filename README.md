@@ -1,4 +1,5 @@
-# M&A Command Center `v5.9.3`
+# Developed and maintained by Marc von Gehlen
+> Built for DeBruyn Capital | Version 5.9.3
 
 Automated M&A sourcing pipeline that identifies investment-grade SME acquisition targets across Europe. Combines **Perplexity Sonar** (live web research), **GPT-4o-mini** (translation, niche intelligence), and **Google Sheets v4** (structured output).
 

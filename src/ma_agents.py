@@ -1,3 +1,9 @@
+# =============================================================
+# DeBruyn Capital — M&A Command Center
+# Version: 5.9.3
+# Core Developer & Architect: Marc von Gehlen
+# =============================================================
+
 from __future__ import annotations
 
 import json

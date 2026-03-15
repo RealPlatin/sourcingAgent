@@ -69,10 +69,3 @@
 - **Root cause**: `consecutive_failures` reset on any non-empty Discovery batch, even if all results were hallucinated.
 - **Fix**: `batch_useful_count` flag — only reset on actual progress.
 
----
-
-## Rejected Companies Log
-- Gesellschaft für Montage und Regeltechnik mbH (GMR) — Umsatz 48,4 Mio. EUR (zu groß)
-- Wisag Industrie Service — Umsatz deutlich über 15 Mio. EUR
-- Baumüller Reparaturwerk GmbH & Co. KG — Umsatz über 15 Mio. EUR
-- Bilfinger SE — Umsatz weit über Zielbereich
