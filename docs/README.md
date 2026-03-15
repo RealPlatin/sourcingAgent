@@ -9,7 +9,7 @@ Automated M&A sourcing pipeline that identifies investment-grade SME acquisition
 ```bash
 cd "DeBruyn Capital"
 source .venv/bin/activate
-python ma_agents.py
+python src/ma_agents.py
 ```
 
 You will be prompted for:
@@ -25,7 +25,7 @@ You will be prompted for:
 flowchart TD
     A([CLI Start]) --> B{Region Select}
     B -->|DACH / UK / Benelux| C[Load Region Profile\nfrom config.json]
-    B -->|Custom name| D[Load Custom Profile\ninject {{region}}]
+    B -->|Custom name| D["Load Custom Profile\ninject region placeholder"]
     C --> E{Niche Select}
     D --> E
     E -->|Preset 1-5| F[Target Industry]
@@ -48,23 +48,23 @@ flowchart TD
     O --> K
     N -->|unique candidates| P[Verify via Perplexity\nFinancials + Ownership + Contact]
 
-    P --> Q[[RAW] Print Rev/Emp/Own]
+    P --> Q["[RAW] Print Rev/Emp/Own"]
     Q --> R{Contact\nmissing?}
-    R -->|yes| S[[Contact-Strike]\nDeep-Link-Scan]
-    S -->|still missing| T[[Contact-Strike]\nExternal Safety-Net\nMaps / NorthData]
+    R -->|yes| S["[Contact-Strike]\nDeep-Link-Scan"]
+    S -->|still missing| T["[Contact-Strike]\nExternal Safety-Net\nMaps / NorthData"]
     T --> U
     S -->|found| U
     R -->|no| U
 
-    U[Pre-Flight Check\nRev/FTE ratio gate] -->|ratio suspicious| V[[Pre-Flight]\nPerplexity fact-check\nBundesanzeiger / Companies House]
+    U[Pre-Flight Check\nRev/FTE ratio gate] -->|ratio suspicious| V["[Pre-Flight]\nPerplexity fact-check\nBundesanzeiger / Companies House"]
     V --> W
     U -->|ratio OK| W
 
     W[Hard Gate Check] -->|subsidiary / wrong size / NO FIT| X[Abgelehnt]
     W -->|CEO missing| Y{CEO Fallback}
-    Y -->|DACH: Impressum lookup| Y1[[CEO-FIX]\nlookup_dach_ceo]
+    Y -->|DACH: Impressum lookup| Y1["[CEO-FIX]\nlookup_dach_ceo"]
     Y1 -->|found| W2[Re-run hard gate]
-    Y1 -->|not found + phone present| Y2[[CEO-Fallback]\nAn die Geschäftsführung]
+    Y1 -->|not found + phone present| Y2["[CEO-Fallback]\nAn die Geschäftsführung"]
     Y2 --> W2
     W2 --> AA[Ready to Call → Targets]
     Y -->|no phone either| AB[Needs Research]
